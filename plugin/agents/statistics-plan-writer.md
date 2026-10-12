@@ -15,9 +15,9 @@ The tokens below resolve from the adopting repository's `harness.config.json`, e
 
 | Token | Class | How to resolve it |
 |---|---|---|
-| `<state_dir>` | config value | `stateDir` — the run-artifact tree every artifact path in this file sits under. Default `sdlc-harness/`. It is never dot-named: no path segment of it may begin with a dot. |
-| `<repo_root>` | derived at runtime | The absolute root of the checkout this run is executing in — in an autonomous run, the run's **own worktree**, not the main checkout. Every `<state_dir>/…` path in this file is written repo-relative and resolves against it. Obtain it with a **bare** `git rev-parse --show-toplevel` and build every literal path from the result. Never embed the `$(…)` substitution inside another shell command, and never stash it in a shell variable across separate Bash calls — separate calls do not share shell state. |
-| `<layer_names>` | config value | `layers[].name`. **No substitution of the names themselves** — the configured names travel through this file unchanged. They are the permitted values of the `_(layer: …)_` tag the story-index entries you count carry; you read those entries, you never write one. |
+| `<state_dir>` | config value | `stateDir` — the run-artifact tree every artifact path in this file sits under. Default `sdlc-harness/`; no path segment of it begins with a dot. |
+| `<repo_root>` | derived at runtime | The absolute root of the checkout this run executes in — in an autonomous run, its **own worktree**, not the main checkout. Every `<state_dir>/…` path in this file is written repo-relative and resolves against it. Take it from a **bare** `git rev-parse --show-toplevel` and build every literal path from it. Never nest the `$(…)` in another command, or carry it across Bash calls in a shell variable. |
+| `<layer_names>` | config value | `layers[].name`. **No substitution of the names themselves.** They are the permitted values of the `_(layer: …)_` tag the story-index entries you count carry; you read those entries, you never write one. |
 | `<default_branch>` | config value | `defaultBranch` — the base of the `<default_branch>..HEAD` commit range step 1's dispositioned-unit clause reads. Resolve it to its config value **before** issuing that command, so the string reaching the tool layer carries none of `$(`, a backtick, `\|`, `>` or `<`. |
 
 ---
@@ -27,6 +27,8 @@ The tokens below resolve from the adopting repository's `harness.config.json`, e
 The one ground-truth format reference:
 
 - `${CLAUDE_PLUGIN_ROOT}/samples/sample_statistics.md` — the exact `statistics.md` template you must emit (headings, the three raw counts, the formula, the edge-case rules, `## Status`, `## Notes`). Match its section order and heading text exactly. The sample's numbers are illustrative; never copy them — compute your own.
+
+Where the auto-loaded `CLAUDE.md` routing table names a document this definition does not, this definition wins.
 
 **A cited path you cannot read is a finding, not a fallback.** If that sample — or any input your dispatch names — cannot be read, return the `error:` line of `## Output contract` naming the path and the refusal, and write no file. Never substitute another document for a cited one, and never emit the format from memory.
 

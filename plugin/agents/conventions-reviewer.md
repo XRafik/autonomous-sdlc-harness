@@ -23,13 +23,13 @@ The tokens below resolve from the adopting repository's `harness.config.json`, e
 | Token | Class | How to resolve it |
 |---|---|---|
 | `<layer_path_map>` | config value | Every `layers[]` entry's `path` together with its `conventions` — the directory that layer's source lives in, and the document written for it. On `pass: document` your dispatch carries one pair of it as `scope` + `document_path`; on `pass: corpus` the map arrives as `corpus_documents`, one entry per member. Read the map to recognise the paths that belong to **other** layers: a rule sourced from one of those is out of this document's scope. |
-| `<layer_names>` | config value | `layers[].name`. **No substitution of the names themselves** — the configured names travel through this file unchanged. Your `target` is one of them, the reserved word `conventions`, or — on `pass: corpus` only, per member — `project`. |
-| `<app_dir>` | config value | `appDir` — the app's directory inside the checkout, repo-relative. It is **not** what the `scope` you are sent resolves against: `layers[].path` values are repo-relative and resolve against `<repo_root>`, and the shared cross-layer document's scope is the repository root. Bound for completeness — no step in this file consumes `<app_dir>`. |
+| `<layer_names>` | config value | `layers[].name`. **No substitution of the names themselves.** Your `target` is one of them, the reserved word `conventions`, or — on `pass: corpus` only, per member — `project`. |
+| `<app_dir>` | config value | `appDir` — the app's directory inside the checkout, repo-relative. It is **not** what the `scope` you are sent resolves against: `layers[].path` values are repo-relative and resolve against `<repo_root>`, and the shared cross-layer document's scope is the repository root. No step in this file uses `<app_dir>`. |
 | `<state_dir>` | config value | `stateDir` — the run-artifact tree. **Never evidence:** a rule derived from it describes this package rather than the adopter's code, which is check (7). |
 | `<scripts_dir>` | config value | `scriptsDir` — the generated wrapper scripts. **Never evidence,** for the same reason. **One probe is not evidence gathering:** the commit-message policy's fixed-form-subject derivation reads the plugin's own tree and `<scripts_dir>` for the subject strings the flow emits — a harness fact the policy must exempt, not an adopter rule inferred from a generated script. It reads subjects and nothing else, and no other rule may be derived from that directory. Check (3) has you re-run that probe and grade closure; check (7) states the exemption. |
 | `<githooks_dir>` | config value | `githooksDir` — the committed git hooks. **Never evidence,** for the same reason. |
 | `<parity_vocabulary>` | config value | `parity.referenceName` — the name of the reference implementation this project is kept in parity with. Read **only** when `phases.parity` is `true`; when it is `false` the project has no reference implementation, the document carries no parity rule, and that absence is not a finding. |
-| `<repo_root>` | derived at runtime | The absolute root of the checkout this run is executing in. Obtain it with a **bare** `git rev-parse --show-toplevel` and build every literal path from the result. Never embed the `$(…)` substitution inside another shell command, and never stash it in a shell variable across separate Bash calls — separate calls do not share shell state. |
+| `<repo_root>` | derived at runtime | The absolute root of the checkout this run executes in. Take it from a **bare** `git rev-parse --show-toplevel` and build every literal path from it. Never nest the `$(…)` in another command, or carry it across Bash calls in a shell variable. |
 
 **The row set above is closed, and no row resolves from a conventions document.** The questions a conventions document must answer reach you as `demand_set`, derived once by the caller for the whole run; this project's own vocabulary reaches you as `shared_document` on `pass: document`, and as the member set itself on `pass: corpus`. You open a conventions document to grade it, never to resolve a value of your own.
 
@@ -148,6 +148,8 @@ C6. **Census and stack-restatement voice across the set** — check (9)'s tests,
 **A coherent corpus returns `findings: none`, and that is a complete answer, not an under-delivery.** These checks fire on a defect visible **between** members; their absence is the expected result on a corpus whose document passes did their job, and you are graded on it — the hand-run gate (`docs/development.md` §5 Gate 8) requires zero findings over a known-good corpus.
 
 **On `iteration: 2`**, read only the members the dispatch sends — the caller narrows the set — and raise a finding only where the corpus is **still** incoherent. There is no third pass to defer to, and no verdict to emit on either iteration.
+
+Where the auto-loaded `CLAUDE.md` routing table names a document this definition does not, this definition wins.
 
 ## What you do not do
 
