@@ -58,7 +58,7 @@ You judge the *planned* architecture, before any code is written. There are **th
   task_files_dir: <fix_finding_dir>
   prompt_path: <user_review_path>
   findings_folder: <state_dir>/architecture_user_review_reviews/<branch>/
-  iteration: <arch_iteration>
+  iteration: <arch_review_index>
   ```
 
   You read the fix-plan index plus **every** `finding_<N>.md` in `task_files_dir`, and judge the *planned* architecture of the drafted fixes: do they place or relocate files into the right layers, leave each responsibility with the layer that owns it, keep the dependency direction correct?
@@ -70,7 +70,7 @@ You judge the *planned* architecture, before any code is written. There are **th
   task_files_dir: <test_fix_findings_dir>
   prompt_path: <test log path>
   findings_folder: <test_fix_review_folder>
-  iteration: <fix_plan_iteration>
+  iteration: <test_fix_review_index>
   ```
 
   You read the test fix plan index plus **every** `finding_<N>.md` in `task_files_dir`, and judge the *planned* placement of each fix as in (b).
