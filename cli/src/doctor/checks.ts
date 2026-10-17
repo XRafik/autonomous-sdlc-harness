@@ -8,6 +8,11 @@
  * {@link runChecks} therefore evaluates every entry of {@link CHECKS} in order and turns a thrown
  * value into that check's own `fail`, so the count at the end is always over the whole list.
  *
+ * {@link JOB_SURFACES_CHECK} is declared beside {@link CHECKS} rather than in it: it reads a ref only
+ * a remote job's checkout carries, and the job runs it before the plugin and the permission profile
+ * exist, so a plain `doctor` run would grade it against nothing. `doctor --job-surfaces=<branch>`
+ * runs it alone, through the same {@link runChecks}.
+ *
  * ## Three non-obvious choices, and where each comes from
  *
  * 1. **Nothing here is re-derived from a second copy.** The backend detection and the watcher path
@@ -42,8 +47,8 @@
  *    **The remote is the one condition that qualifies that sentence, and it is deliberately a
  *    `fail`** — do not soften it back to a warning. A repository adopted by `init --git-init` has no
  *    remote by construction, so it is freshly wired and still exits non-zero: `create-worktree.sh`
- *    creates every run's checkout from `origin/<defaultBranch>`, so with no such ref the flow does
- *    not start at all and the report would otherwise be all-green about a repository nothing can run
+ *    creates every run's checkout from the commit origin reports for `<defaultBranch>`, so with no
+ *    origin the flow does not start at all and the report would otherwise be all-green about a repository nothing can run
  *    in. That is what separates it from the two checks whose remedies are also hand steps and which
  *    never fail (`notifications`, `repo-registry`): neither of those is a precondition for a run to
  *    begin, and this one is. The remedy is an adopter's to take — add a remote, push the branch —
@@ -89,8 +94,8 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { accessSync, constants as fsConstants, existsSync, readFileSync, statSync } from 'node:fs';
 import { delimiter, join, posix, resolve as resolvePath } from 'node:path';
 
-import { formatProblem, type ConfigProblem } from '../config/check.js';
-import { loadConfig } from '../config/io.js';
+import { formatProblem, hasErrors, type ConfigProblem } from '../config/check.js';
+import { loadConfig, loadConfigText } from '../config/io.js';
 import {
   answersNone,
   browserWiringApplies,
@@ -113,11 +118,15 @@ import {
 } from '../config/model.js';
 import {
   branchResolves,
+  changedPathsBetween,
   checkedOutBranch,
+  commitResolves,
   commitsAhead,
   configuredRemotes,
+  fileAtRef,
   hasCommits,
   mainWorktreeRoot,
+  mergeBase,
   pathAtRef,
   pathIsIgnored,
   remoteTrackingBranchResolves,
@@ -211,7 +220,7 @@ import {
   SANDBOX_OPT_OUT_MARKER,
   shippedSandboxSettings,
 } from '../generators/sandboxProfile.js';
-import { fileToolDenyRules, protectedPaths } from '../generators/writeProtection.js';
+import { fileToolDenyRules, jobSurfacePaths, protectedPaths } from '../generators/writeProtection.js';
 import {
   configKeyPath,
   configuredWrapperFile,
@@ -471,6 +480,25 @@ export interface CheckContext {
    * `permissions.additionalDirectories`. `false` in every default run.
    */
   readonly remoteJob: boolean;
+  /** What `doctor --job-surfaces=<branch>[@<commit>[@<base>]]` asked {@link JOB_SURFACES_CHECK} about; absent otherwise. */
+  readonly jobSurfaces?: JobSurfacesTarget;
+}
+
+/** The value of `doctor --job-surfaces=`, split at its last `@`, and at the one before it when both ids are given. */
+export interface JobSurfacesTarget {
+  /** The default branch the job was dispatched against. Without {@link commit}, its ref is the trusted one. */
+  readonly branch: string;
+  /**
+   * The default branch's commit recorded before any session had the checkout. When present it is the
+   * trusted configuration's tree and the merge-base side, no `refs/remotes/origin/*` ref is read, and
+   * {@link branch} only labels the messages.
+   */
+  readonly commit?: string;
+  /**
+   * The configured `defaultBranch`'s commit, recorded before any session had the checkout. When present
+   * it is the merge-base side in place of {@link commit}, which still supplies the configuration.
+   */
+  readonly base?: string;
 }
 
 /** The permission lists a generated profile carries, in the order the template writes them. */
@@ -758,12 +786,14 @@ function serversStartedByProfile(profile: JsonObject): readonly string[] {
  * default to `false`: a context built without them is the context every default run gets, and no
  * check here reaches a network unless the command was asked to. `remoteJob` is the caller's too, and
  * defaults to `false` for the same reason: only the remote job's preflight asks for its grading.
+ * `jobSurfaces` is carried through untouched for {@link JOB_SURFACES_CHECK}.
  */
 export function buildCheckContext(
   cwd: string,
   probeRegistry = false,
   probeGithub = false,
   remoteJob = false,
+  jobSurfaces?: JobSurfacesTarget,
 ): CheckContext {
   let repoRoot: string | undefined;
   let repoProblem: string | undefined;
@@ -773,7 +803,10 @@ export function buildCheckContext(
     repoProblem = messageOf(error);
   }
 
-  if (repoRoot === undefined) return { cwd, repoProblem, configProblems: [], probeRegistry, probeGithub, remoteJob };
+  const job = jobSurfaces === undefined ? {} : { jobSurfaces };
+  if (repoRoot === undefined) {
+    return { cwd, repoProblem, configProblems: [], probeRegistry, probeGithub, remoteJob, ...job };
+  }
 
   const loaded = loadConfig(repoRoot);
   const profileRoot = mainWorktreeRoot(repoRoot) ?? repoRoot;
@@ -810,6 +843,7 @@ export function buildCheckContext(
     probeRegistry,
     probeGithub,
     remoteJob,
+    ...job,
   };
 }
 
@@ -1045,17 +1079,20 @@ const DEFAULT_BRANCH_CHECK: Check = {
  * `fatal: 'origin' does not appear to be a git repository`.
  *
  * The precondition is `create-worktree.sh`'s, and it is two steps rather than one: the new-branch
- * arm fetches `origin/<defaultBranch>` and then creates the worktree **from that ref**, and pushes
- * the new branch to `origin` afterwards. That script refuses both bad states itself, before it
- * creates anything (`exit 2`, naming the remedy and this check), so a repository missing one gets no
- * worktree and nothing downstream — no phase, no agent, no commit — runs. This check is what says so
+ * arm creates the worktree from the default branch's commit as origin reports it
+ * (`hr_run_trusted_base_var`) and pushes the new branch to `origin` afterwards. That script refuses
+ * a missing `origin`, and one it cannot reach or that does not report exactly one commit for the
+ * branch, itself, before it creates anything (`exit 2`, naming the remedy and this check), so such
+ * a repository gets no worktree and nothing downstream — no phase, no agent, no commit — runs. This check is what says so
  * before a prompt is dropped rather than in the run log of the drop that failed.
  *
  * Both bad states are a `fail`, for the reason choice 2 in the module header spells out: this is the
  * one hand-remediable condition that is a precondition for a run to begin, which is what separates
  * it from `notifications` and `repo-registry`. The second state is the one worth having a check for
- * — a remote is configured, so `git remote -v` reassures, and the ref the script actually names is
- * still not there.
+ * — a remote is configured, so `git remote -v` reassures, and the branch the script asks origin for
+ * may still not be there. The check reads the remote-tracking ref as this checkout last fetched it,
+ * so it is an offline proxy: a stale ref with an unreachable `origin` passes here and is refused by
+ * the script.
  *
  * It asks {@link remoteTrackingBranchResolves} rather than {@link branchResolves}: the latter stops
  * at the local spelling, which the checkout of an integration line always has, so it would answer
@@ -1081,32 +1118,33 @@ const REMOTE_CHECK: Check = {
     const remotes = configuredRemotes(ctx.repoRoot);
     if (remotes.length === 0) {
       return fail(
-        `this repository has no remote configured, so no run can be started in it: ${WORKTREE_SCRIPT} fetches origin/${branch} and creates every run's checkout from that ref, and with no origin it refuses before a worktree exists — the flow stops before any phase begins. Add one and push the branch (\`git remote add origin <url> && git push -u origin ${branch}\`), or run the flow in a checkout that already has a remote`,
+        `this repository has no remote configured, so no run can be started in it: ${WORKTREE_SCRIPT} creates every run's checkout from the commit origin reports for ${branch}, and with no origin it refuses before a worktree exists — the flow stops before any phase begins. Add one and push the branch (\`git remote add origin <url> && git push -u origin ${branch}\`), or run the flow in a checkout that already has a remote`,
       );
     }
 
     if (!remoteTrackingBranchResolves(ctx.repoRoot, branch)) {
       return fail(
-        `this repository has a remote (${nameList(remotes)}) but no origin/${branch} remote-tracking ref, so no run can be started in it: ${WORKTREE_SCRIPT} creates every run's checkout from origin/${branch}, and a local branch of that name does not satisfy it. Push the branch with \`git push -u origin ${branch}\`, or fetch it with \`git fetch origin ${branch}\` if it is already on the remote — and if the remote here is not called origin, add one that is`,
+        `this repository has a remote (${nameList(remotes)}) but no origin/${branch} remote-tracking ref, so no run can be started in it: ${WORKTREE_SCRIPT} creates every run's checkout from the commit origin reports for ${branch}, and a local branch of that name does not satisfy it. Push the branch with \`git push -u origin ${branch}\`, or fetch it with \`git fetch origin ${branch}\` if it is already on the remote — and if the remote here is not called origin, add one that is`,
       );
     }
 
     return pass(
-      `origin is configured (${nameList(remotes)}) and origin/${branch} resolves as a remote-tracking ref, which is what ${WORKTREE_SCRIPT} branches a run's checkout from`,
+      `origin is configured (${nameList(remotes)}) and origin/${branch} resolves as a remote-tracking ref, as this checkout last fetched it; ${WORKTREE_SCRIPT} cuts a run's checkout from the commit origin reports for ${branch} when the run starts`,
     );
   },
 };
 
 /**
- * Is the ref a run's working copy would be cut from **current** — or has this checkout got commits
- * on the integration line that were never pushed?
+ * Is the default branch as this checkout last saw it on origin **current** — or has this checkout
+ * got commits on the integration line that were never pushed?
  *
  * **The question `remote` above cannot answer.** That one asks whether `origin/<defaultBranch>`
  * exists at all; a ref that exists and is behind the local branch satisfies it completely. So the
  * repository this reports on is one where every other line is green: `create-worktree.sh` branches
- * every run's working copy from `origin/<defaultBranch>`, and a run started there gets a base
- * missing whatever was not pushed — commonly the harness wiring itself, which is discovered only
- * after a planning phase has been paid for and the run has parked.
+ * every run's working copy from the commit origin reports for `<defaultBranch>`, which that ref
+ * records as of the last fetch, and a run started there gets a base missing whatever was not
+ * pushed — commonly the harness wiring itself, which is discovered only after a planning phase has
+ * been paid for and the run has parked.
  *
  * **A `warn`, never a `fail`, and do not promote it.** The run does start and parks cleanly, so
  * this is not a precondition in the sense the module header's choice 2 reserves `fail` for — and a
@@ -1133,7 +1171,7 @@ const REMOTE_CHECK: Check = {
  */
 const BASE_FRESHNESS_CHECK: Check = {
   id: 'base-freshness',
-  title: "the ref a run's working copy is branched from is not behind this checkout",
+  title: 'the default branch as this checkout last saw it on origin is not behind the local one',
   run: (ctx) => {
     if (ctx.repoRoot === undefined) return unevaluated('the repository root did not resolve (see the git check)');
     if (ctx.config === undefined) return unevaluated(`${CONFIG_FILENAME} could not be read (see the config check)`);
@@ -1169,12 +1207,12 @@ const BASE_FRESHNESS_CHECK: Check = {
 
     if (ahead > 0) {
       return warn(
-        `${branch} is ${ahead} commit${ahead === 1 ? '' : 's'} ahead of origin/${branch}, so a run started now gets a stale base: ${WORKTREE_SCRIPT} branches every run's working copy from origin/${branch}, and nothing in those commits would be in it — which is how a whole planning phase gets paid for before anything discovers what is missing from the worktree. Push them from this checkout with \`git push origin ${branch}\`; a working copy that already exists catches up with \`${scriptInvocation(outerLoopScriptsDir(ctx.config), REFRESH_SCRIPT)} --local\`, the one refresh route the protected-branch guard permits. A warning rather than a failure because the run does start and parks cleanly`,
+        `${branch} is ${ahead} commit${ahead === 1 ? '' : 's'} ahead of origin/${branch}, so a run started now gets a stale base: ${WORKTREE_SCRIPT} branches every run's working copy from the commit origin reports for ${branch}, which origin/${branch} records as of the last fetch, and nothing in those commits would be in it — which is how a whole planning phase gets paid for before anything discovers what is missing from the worktree. Push them from this checkout with \`git push origin ${branch}\`; a working copy that already exists catches up with \`${scriptInvocation(outerLoopScriptsDir(ctx.config), REFRESH_SCRIPT)} --local\`, the one refresh route the protected-branch guard permits. A warning rather than a failure because the run does start and parks cleanly`,
       );
     }
 
     return pass(
-      `origin/${branch} contains every commit ${branch} has, as this checkout last saw the remote, so a working copy ${WORKTREE_SCRIPT} cuts from origin/${branch} carries everything this checkout has of the integration line`,
+      `origin/${branch} contains every commit ${branch} has, as this checkout last saw the remote, so a working copy ${WORKTREE_SCRIPT} cuts from the commit origin reports for ${branch} carries everything this checkout has of the integration line`,
     );
   },
 };
@@ -4530,7 +4568,7 @@ const PROFILE_CHECK: Check = {
  * branch, so the job's create-if-absent `init` finds none and generates its own.
  *
  * The commit must land on the **default branch**, because every run's branch is cut from
- * `origin/<defaultBranch>` (`create-worktree.sh` → `worktree add … "origin/$default_branch"`): an
+ * `origin/<defaultBranch>` (`create-worktree.sh` → `hr_run_trusted_base_var`): an
  * untrack pushed only to a run branch covers that one run, and the next branch carries the profile
  * again. The push and its `--no-verify` reason are `core/defaultBranchPush.ts`'s, spelled nowhere here.
  *
@@ -5801,14 +5839,100 @@ export const CHECKS: readonly Check[] = Object.freeze([
 ]);
 
 /**
- * Evaluate every check in order and return one result each.
+ * Whether the run branch's **own** commits — those between `merge-base(HEAD, <base>)` and `HEAD` —
+ * changed any path in {@link jobSurfacePaths}, the files a remote job runs or loads from its checkout.
+ *
+ * Every value it grades by is the trusted side's: the configuration, its `defaultBranch` and the
+ * surface list derived from it come from `<trusted ref>:harness.config.json`, never from `HEAD`, so a
+ * branch cannot widen what it may change by rewriting its own configuration. The trusted ref and the
+ * base are `refs/remotes/origin/<branch>` and `refs/remotes/origin/<defaultBranch>`, or, under
+ * `@<commit>`, the recorded commit for the configuration and — under `@<commit>@<base>` — the recorded
+ * `defaultBranch` commit for the merge base, where a session that wrote the checkout's refs could have moved
+ * them. Comparing from the merge base rather than the default branch's tip is what lets a branch that
+ * merged a newer default branch pass: those changes are not its own.
+ */
+export const JOB_SURFACES_CHECK: Check = {
+  id: 'job-surfaces',
+  title: "the run branch's own commits leave every path the remote job runs or loads unchanged",
+  run: (ctx) => {
+    const target = ctx.jobSurfaces;
+    if (target === undefined) return unevaluated('no --job-surfaces value was given');
+    if (ctx.repoRoot === undefined) {
+      return unevaluated(`the repository root did not resolve: ${ctx.repoProblem ?? 'git gave no reason'}`);
+    }
+    const root = ctx.repoRoot;
+    const { branch, commit, base } = target;
+
+    let trustedRef: string;
+    if (commit !== undefined) {
+      if (!commitResolves(root, commit)) {
+        return fail(
+          `the trusted commit ${commit} given for ${branch} is not a commit this checkout holds (${commit}^{commit} does not resolve), so neither the trusted configuration nor the merge base can be read — pass the commit ${branch} pointed at before any session had the checkout`,
+        );
+      }
+      trustedRef = commit;
+    } else {
+      trustedRef = `refs/remotes/origin/${branch}`;
+      if (!remoteTrackingBranchResolves(root, branch)) {
+        return fail(
+          `${trustedRef} does not resolve, so the trusted ${CONFIG_FILENAME} cannot be read — fetch origin/${branch} into this checkout first`,
+        );
+      }
+    }
+    if (base !== undefined && !commitResolves(root, base)) {
+      return fail(
+        `the recorded base commit ${base} is not a commit this checkout holds (${base}^{commit} does not resolve), so the merge base cannot be taken — pass the commit the workflow recorded`,
+      );
+    }
+
+    const origin = `${trustedRef}:${CONFIG_FILENAME}`;
+    const loaded = loadConfigText(fileAtRef(root, trustedRef, CONFIG_FILENAME), origin);
+    if (loaded.config === undefined || hasErrors(loaded.problems)) {
+      const errors = loaded.problems.filter((problem) => problem.severity === 'error').map(formatProblem);
+      return fail(
+        `the trusted configuration ${origin} is not usable, so no surface list can be derived from it: ${errors.length === 0 ? 'it is not a JSON object' : errors.join('; ')}`,
+      );
+    }
+    const trusted = loaded.config;
+    const defaultBranch = trusted.defaultBranch;
+    if (typeof defaultBranch !== 'string' || defaultBranch === '') {
+      return fail(`the trusted configuration ${origin} carries no defaultBranch, so no merge base can be computed`);
+    }
+
+    const baseRef = base ?? commit ?? `refs/remotes/origin/${defaultBranch}`;
+    const mergeBaseId = mergeBase(root, 'HEAD', baseRef);
+    if (mergeBaseId === undefined) {
+      return fail(
+        `HEAD and ${baseRef} have no merge base, or one of them does not resolve, so the run branch's own commits cannot be told apart from the default branch's`,
+      );
+    }
+
+    const surfaces = jobSurfacePaths(trusted);
+    const changed = changedPathsBetween(root, mergeBaseId, 'HEAD', surfaces);
+    if (changed === undefined) {
+      return fail(`git could not compare ${mergeBaseId} with HEAD over the job's surfaces, so whether the run branch changed them is unknown`);
+    }
+    if (changed.length > 0) {
+      return fail(
+        `the run branch's own commits since ${mergeBaseId} changed ${changed.length === 1 ? 'a path' : 'paths'} the remote job runs or loads from its checkout: ${changed.join(', ')} — land that change on ${defaultBranch} through a supervised route, then re-dispatch`,
+      );
+    }
+    return pass(
+      `the run branch's own commits since ${mergeBaseId} change none of the ${surfaces.length} paths the remote job runs or loads (configuration read from ${origin})`,
+    );
+  },
+};
+
+/**
+ * Evaluate every check in order — {@link CHECKS} unless the caller names another list — and return
+ * one result each.
  *
  * **The try/catch is here rather than in each check**, so the property the module header states is
  * structural: a check cannot forget to catch, because it is not the thing catching. A thrown value
  * becomes that check's `fail` naming the check that threw, and the rest of the list still runs.
  */
-export function runChecks(ctx: CheckContext): CheckResult[] {
-  return CHECKS.map((check) => {
+export function runChecks(ctx: CheckContext, checks: readonly Check[] = CHECKS): CheckResult[] {
+  return checks.map((check) => {
     let outcome: CheckOutcome;
     try {
       outcome = check.run(ctx);
