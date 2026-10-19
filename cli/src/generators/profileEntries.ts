@@ -133,12 +133,28 @@ export function appendReadme(profile: JsonObject, line: string): void {
 }
 
 /**
+ * A `sandbox.excludedCommands` entry, `bash <path>:*` — the one producer of one.
+ *
+ * Measured in `docs/sandbox-verification.md` rows P1a and P2 (Claude Code 2.1.299, macOS, headless):
+ * `bash <path>:*` excludes a call that carries an argument, and the push it excluded landed. The
+ * `Bash(…)` rule form must never be used there: it matches nothing, so the wrapper runs sandboxed.
+ */
+export function sandboxExcludedCommand(absolutePath: string): string {
+  return `${INVOCATION_PREFIX}${absolutePath}:*`;
+}
+
+/**
  * A wrapper-script rule, in the unquoted `Bash(bash <path>:*)` form every generated one uses — and
  * the other plugin-root form, for a helper under the plugin's own scripts directory. Same consumers,
- * and the same decision, as `permissionProfile.ts`'s `readRule`.
+ * and the same decision, as `permissionProfile.ts`'s `readRule`. Built from
+ * {@link sandboxExcludedCommand} only because the two share `bash <path>:*` today; its output is
+ * byte-identical to the `Bash(bash <path>:*)` literal it replaced. The two follow separate grammars —
+ * this one the `permissions.allow` rule grammar, that one a measured excluded-command pattern — and
+ * `profile.test.mjs` pins each on its own, so a change to either fails a test rather than moving the
+ * other.
  */
 export function bashScriptRule(absolutePath: string): string {
-  return `Bash(${INVOCATION_PREFIX}${absolutePath}:*)`;
+  return `Bash(${sandboxExcludedCommand(absolutePath)})`;
 }
 
 /**

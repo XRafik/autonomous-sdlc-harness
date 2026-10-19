@@ -4723,7 +4723,7 @@ const PROFILE_DENY_FLOOR_CHECK: Check = {
 
 /**
  * Is the profile's `sandbox` block what the configuration asks for: on, strict, excluding exactly
- * the expected wrapper rules, allowing exactly the expected domains — or, under a taken
+ * the expected wrapper entries, allowing exactly the expected domains — or, under a taken
  * `sandbox.optOut`, off with the opt-out marker in `_README`?
  *
  * Every expected value is {@link expectedSandbox}'s or {@link shippedSandboxSettings}', computed for
@@ -4735,6 +4735,9 @@ const PROFILE_DENY_FLOOR_CHECK: Check = {
  * item 20 (`docs/development.md` → `## 6. The roadmap this tree defers to`). **Under `--remote-job`**
  * ({@link CheckContext.remoteJob}) every finding is a `fail`, except the taken opt-out, which stays a
  * `warn` because it is the repository's choice. Every non-pass names `init --force` as the remedy.
+ * An excluded entry in an earlier release's `Bash(…)` form ({@link expectedSandbox}'s `staleExcludedCommands`)
+ * is reported as stale by name, under the same grading, instead of as an unnamed extra: that form
+ * matches no command (`docs/sandbox-verification.md` → P1a), so its wrapper runs sandboxed.
  */
 const PROFILE_SANDBOX_CHECK: Check = {
   id: 'profile-sandbox',
@@ -4786,12 +4789,22 @@ const PROFILE_SANDBOX_CHECK: Check = {
 
     const excludedPath = `${SANDBOX_KEY}.excludedCommands`;
     const excluded = stringsAt(valueAt(ctx.profile, excludedPath.split('.')));
-    for (const entry of expected.excludedCommands.filter((rule) => !excluded.includes(rule))) {
+    const staleHeld = expected.staleExcludedCommands.filter((rule) => excluded.includes(rule));
+    for (const stale of staleHeld) {
+      const paired = expected.excludedCommands[expected.staleExcludedCommands.indexOf(stale)];
+      findings.push(
+        `\`${excludedPath}\` carries ${stale}, the \`Bash(…)\` spelling an earlier release generated, which matches no command: ${paired} is the spelling that runs outside the sandbox, and without it that wrapper runs sandboxed and its SSH push or fetch fails`,
+      );
+    }
+    const missing = expected.excludedCommands.filter(
+      (rule, i) => !excluded.includes(rule) && !staleHeld.includes(expected.staleExcludedCommands[i] ?? ''),
+    );
+    for (const entry of missing) {
       findings.push(
         `\`${excludedPath}\` lacks ${entry}: that wrapper's SSH push or fetch fails inside the sandbox on macOS, and the push wrapper still exits 0`,
       );
     }
-    for (const entry of excluded.filter((rule) => !expected.excludedCommands.includes(rule))) {
+    for (const entry of excluded.filter((rule) => !expected.excludedCommands.includes(rule) && !staleHeld.includes(rule))) {
       findings.push(`\`${excludedPath}\` carries ${entry}, which the configuration does not name: it runs with full access and reaches any host`);
     }
 
@@ -4810,7 +4823,7 @@ const PROFILE_SANDBOX_CHECK: Check = {
 
     if (findings.length > 0) return grade(`${PROFILE_PATH}: ${findings.join('; ')}. ${regenerate}`);
     return pass(
-      `${PROFILE_PATH}'s \`${SANDBOX_KEY}\` block is on and strict, excludes exactly the ${expected.excludedCommands.length} expected wrapper rules and allows exactly the ${expected.allowedDomains.length} expected domains`,
+      `${PROFILE_PATH}'s \`${SANDBOX_KEY}\` block is on and strict, excludes exactly the ${expected.excludedCommands.length} expected wrapper entries and allows exactly the ${expected.allowedDomains.length} expected domains`,
     );
   },
 };
