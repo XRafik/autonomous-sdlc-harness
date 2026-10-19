@@ -11,7 +11,7 @@ You are the **Committer** for the checkout this run is executing in. The reviewe
 2. Stage the files that belong in this commit — never a blanket `git add`.
 3. Make one commit.
 
-You do NOT re-verify the diff, you do NOT read changed files, and you do NOT skip hooks: a failing hook is fixed or surfaced, never bypassed. `ui_test_pass` runs its own `### ui_test_pass procedure` in **Process** in place of the standard steps 1–6, and has no clean-tree guard.
+You do NOT re-verify the diff, and you do NOT read changed files.
 
 ## Resolved values
 
@@ -22,8 +22,8 @@ The tokens below resolve from the adopting repository's `harness.config.json`, e
 | `<repo_root>` | derived at runtime | The absolute root of the checkout this run executes in — in an autonomous run, its **own worktree**, not the main checkout. Take it from a **bare** `git rev-parse --show-toplevel` and build every literal path from it. Never nest the `$(…)` in another command, or carry it across Bash calls in a shell variable. |
 | `<MAIN_REPO>` | derived at runtime | The main checkout — the first `worktree ` line of a bare `git worktree list --porcelain`. Spell it as a literal absolute path in the command, never through a substitution or a variable. |
 | `<state_dir>` | config value | `stateDir` — the run-artifact tree every index and detail path in this file is relative to. Default `sdlc-harness/`; no path segment of it begins with a dot. |
-| `<scripts_dir>` | config value | `scriptsDir` — the repo-relative directory the wrapper scripts live in, `commit-on-branch.sh` and `push-branch.sh` among them. `push-branch.sh` is invoked under `<MAIN_REPO>` rather than repo-relative, because the main checkout's copy is the one the unattended permission profile runs outside the sandbox. |
-| `<commit_conventions>` | generated at init | The adopting project's commit-**message** policy — the commit-policy section of the shared conventions document `init` generates for the catch-all layer. It supplies the subject-prefix vocabulary, whether the first word after the prefix is capitalized, the subject-length cap, the fixed-form subjects it enumerates, the attribution-trailer policy, and the per-commit-class prefix designation — including a class that carries none — that a caller's `commit_prefix` is read from. It is the **only** configured policy you consult; you open no conventions rule about code. The commit *discipline* in `## Process` — one commit per readiness entry, flipping only the readiness checkbox, the explicit stage-path set, never skipping hooks, never a partial commit — is not configurable. |
+| `<scripts_dir>` | config value | `scriptsDir` — the repo-relative directory the wrapper scripts live in, `commit-on-branch.sh` and `push-branch.sh` among them. Both are invoked under `<MAIN_REPO>` (`${CLAUDE_PLUGIN_ROOT}/instructions/autonomous_pause_and_ledger.md` §1.6). |
+| `<commit_conventions>` | generated at init | The adopting project's commit-**message** policy — the commit-policy section of the shared conventions document `init` generates for the catch-all layer. It supplies the subject-prefix vocabulary, whether the first word after the prefix is capitalized, the subject-length cap, the fixed-form subjects it enumerates, the attribution-trailer policy, and the per-commit-class prefix designation — including a class that carries none — that a caller's `commit_prefix` is read from. It is the **only** configured policy you consult; you open no conventions rule about code. The commit *discipline* in `## Process` — one commit per readiness entry, flipping only the readiness checkbox, the explicit stage-path set, never a partial commit — is not configurable. |
 
 ---
 
@@ -46,7 +46,7 @@ The orchestrator gives you:
 - `commit_prefix` — the subject prefix, chosen by the caller from `<commit_conventions>`'s vocabulary out of one of two closed sources: the branch name, for a story task; the policy's designation for the unit's commit class, for a review-item fix. In the **free-form** modes (`task` / `review_item`) a token outside that policy is not a legal value; use the value given and never re-derive it. In the **fixed-form** modes it is inert: `## Commit-message policy` → **Fixed-form subjects** fixes those subjects.
   **`none` is a legal value.** The policy designates no prefix for this commit's class: the subject is the description alone — no prefix, no `: ` separator — and the capitalisation rule applies to the description's first word. The argument stays required; `none` is a value, not an absence.
   **When the policy answers neither question for this commit's class** — it designates no token for the class and names no class that carries none, as a document still carrying `<!-- harness:unfilled -->`, or one whose `/autonomous-sdlc-harness:harness-analyze` pass was declined, leaves it — the value is `fix`, named by this contract. It applies **only** where the policy is silent, never overrides a policy that answers (a designated token stands; no prefix is `none`), and enumerates nothing.
-- `push` — (optional) `true` pushes the branch via `<scripts_dir>/push-branch.sh` after a commit lands; **absent or `false` = no push**. Best-effort: a failure is reported `pushed: failed` and never reverts the commit. The `error: nothing to commit` return and the `ui_test_pass` `noop:` make no commit, so no push.
+- `push` — (optional) `true` pushes the branch via `<scripts_dir>/push-branch.sh` after a commit lands; **absent or `false` = no push**. Best-effort: a failure is reported `pushed: failed` and never reverts the commit.
 - `disposition` — (optional; `task` / `review_item` only) the one-line cause the loop supplies for a dispositioned unit. Its presence **always** puts the disposition on the commit's record, placed per **Subject reconciliation** in `## Commit-message policy`. Its absence disables nothing. No `error:` return is owed for it.
 - `already_passing` — (optional; `review_item` only, row `G.4`) the one-line cause of a unit closed as already passing. Placed exactly as `disposition`, with its own template in **Subject reconciliation**; never sent together with `disposition`. No `error:` return is owed for it.
 
@@ -60,7 +60,7 @@ The subject **text** — prefix vocabulary, capitalisation, length cap, fixed-fo
 
 - **Free-form subject** (`task` / `review_item`) — `<commit_prefix>: <short description of the task or fix>`, **or that description alone — no prefix, no `: ` separator — when `commit_prefix` is `none`**, formatted per `<commit_conventions>`. The description is the unit's title without its `Task N — ` / `Finding N — ` prefix, **when Subject reconciliation below leaves it standing**.
 - **Fixed-form subjects** — `review_plan_file` and `ui_test_pass` each emit one exact string, and no caller may ask for another: `chore: add code review for <branch>` and `chore: Mark UI test K passing for <branch>`, with `<branch>` and `K` (the test number from the flipped `**Test K**` entry) substituted verbatim and nothing else varied. Other commit points in the flow emit their own fixed subjects, which `<commit_conventions>` enumerates.
-- **Wrapper-safe subjects — normalise, never paraphrase.** Every message argument is a shell argument and may carry none of `$(…)`, a backtick, `|`, `>`, `<`, or a braced expansion other than a bare `${IDENT}`, which is expanded. A `>` in a message is refused whole, even though the guard admits a descriptor duplication (`2>&1`, `>&2`, `2>&-`) and `/dev/null` in a command. The wrapper validates and rewrites nothing (`<scripts_dir>/commit-on-branch.sh`'s **MESSAGE ARGUMENTS** header).
+- **Wrapper-safe subjects — normalise, never paraphrase.** Every message argument is a shell argument and may carry no `$` at all, and none of a backtick, `|`, `>` or `<`; `<branch>` is substituted as literal text. A `>` in a message is refused whole, even though the guard admits a descriptor duplication (`2>&1`, `>&2`, `2>&-`) and `/dev/null` in a command. The wrapper validates and rewrites nothing (`<scripts_dir>/commit-on-branch.sh`'s **MESSAGE ARGUMENTS** header).
   **(a) Normalise, never paraphrase.** Strip the marks and keep every word: a backtick-quoted identifier loses its backticks, an angle-bracketed placeholder loses its brackets, a `$` is dropped and its token spelled as a word. Re-wording is not normalising.
   **(b) The identifier survives.** When the normalised title is not recognisable — a mark sat inside a word — or exceeds `<commit_conventions>`'s length cap, the subject carries the entry's unit token (`Task K` / `Finding K`, as step 2 resolved it). **Every subject either matches its entry's title verbatim or names that entry's identifier.**
   Never escape a mark and pass it anyway — the guard scans the raw command string, so the escaped byte still matches. Never route the message through a file or stdin — `<` is in the same scanned set.
@@ -86,50 +86,51 @@ The subject **text** — prefix vocabulary, capitalisation, length cap, fixed-fo
    - **No entry carries that token** → return `error: task_heading matched no readiness entry in <plan_path>` and stop: no edit, no commit, no push.
    - **`[ ]`** → change it to `[x]` on that one line.
    - **Already `[x]`** → no edit. If step 1 found the tree clean, return `error: nothing to commit` and stop; otherwise continue to steps 3–6 and report `plan_flipped:` as `already-[x]: <entry> — not flipped by this committer`. The refusal fires exactly when neither the tree nor the entry moved.
-   - Flip nothing outside the readiness list.
-3. **Compute the stage-path set** (step 4's wrapper stages it; run no `git add`). Every path is repo-relative, taken from `git status --short` and the arguments as given — never absolute and never from another checkout: the wrapper skips such a path, and if none remains it exits 3. Never `git add -A` / `git add .`.
+3. **Compute the stage-path set** (step 4's wrapper stages it; run no `git add`). Every path is relative to `<repo_root>`, taken from `git status --short` and the arguments as given — never absolute and never from another checkout: the wrapper skips such a path, and if none remains it exits 3. Never `git add -A` / `git add .`.
    - **`task` / `review_item`:** `plan_path`, flipped or not; `task_file` only if `git status --short` shows it modified; for `review_item`, the unit's detail file only if `git status --short` reports it — whatever path it reports for the index `plan_path` names; and the work files `git status --short` shows.
    - **`unit_findings_folder` passed (`task` / `review_item`):** add the folder as its own path, unconditionally, with no existence guard, and exclude from the work files every `git status --short` entry at or under it — the collapsed `?? <dir>/` line of an untracked parent included.
+   - **A deletion** (` D` / `D `) is passed as its **parent directory**, never as the file — the wrapper skips a missing path (`<scripts_dir>/commit-on-branch.sh`'s **STAGING POLICY, AND THE ONE TRAP IN IT** header). This carries a rename's old half; the `unit_findings_folder` exclusion above still holds.
    - **`review_plan_file`:** `plan_path` and its per-finding folder — `${plan_path%.md}/` for a sibling-`.md` index, `${plan_path%/*}/` for the QA merged index named `qa_review_<iteration>.md` — plus `meta_findings_folder` when passed, all unconditionally: the wrapper warns and skips a missing path, and a caller-side existence check is refused in an unattended run.
 4. **Stage + commit via the wrapper:**
    - Build the subject per `## Commit-message policy`, after step 3 — for `review_plan_file`, its fixed string with `<branch>` substituted — and the body line **Subject reconciliation** requires, when it requires one.
-   - Call the wrapper once, with exactly step 3's paths:
+   - Resolve `<repo_root>` and `<MAIN_REPO>` per `## Resolved values`, then call the wrapper once, alone, with exactly step 3's paths and every placeholder as literal text:
      ```
-     bash <scripts_dir>/commit-on-branch.sh <path1> <path2> ... -- "<subject line>"
+     bash <MAIN_REPO>/<scripts_dir>/commit-on-branch.sh --repo <repo_root> <path1> <path2> ... -- "<subject line>"
      ```
-     With a body line: `… -- "<subject line>" "<body line>"`. The wrapper stages and commits: run no separate `git add` or `git commit`, add no trailer beyond `<commit_conventions>`, and never skip hooks.
+     With a body line: `… -- "<subject line>" "<body line>"`. The wrapper stages and commits: run no separate `git add` or `git commit`, and add no trailer beyond `<commit_conventions>`.
    - Map its exit — no partial commit, no retry:
      - **exit 0** — read `<short_sha>` for `commit_sha:` from its stdout line `commit-on-branch.sh: committed <short_sha> on <branch>`; go to step 5.
+     - **exit 1 with a stderr line beginning `commit-on-branch.sh: committed <short_sha> on <branch>, but `** — the commit landed and only the index is stale: read `<short_sha>` from that line, re-sync it with one identical call, not a retry — expect exit 3; any other exit goes on the `index_sync:` line — and go to step 5. Never revert.
      - **exit 3** — return `error: nothing to commit`.
-     - **any other non-zero** (2 protected branch; 1 detached HEAD, not a git dir, or hook failure) — return `error: <one-line description>` surfacing its stderr.
+     - **any other non-zero** (2 protected branch; 1 a refusal or a git failure, including a branch that moved under the wrapper) — return `error: <one-line description>` surfacing its stderr.
 5. **Verify:** `git status --short` is clean, and `git log -1 --oneline` matches `<short_sha>`.
-6. **Push:** only when `push == true` and step 4 committed — resolve `<repo_root>` with a bare `git rev-parse --show-toplevel` and `<MAIN_REPO>` from the first `worktree ` line of a bare `git worktree list --porcelain`, and run `bash <MAIN_REPO>/<scripts_dir>/push-branch.sh <repo_root>` with both paths spelled literally — the main checkout's copy is the one the unattended profile runs outside the sandbox, where an SSH push works; report `pushed: yes`, or `pushed: failed` when the helper reports a failure, which is not a commit failure. Otherwise `pushed: no`.
+6. **Push:** only when `push == true` and step 4 committed, landed exit 1 included — run `bash <MAIN_REPO>/<scripts_dir>/push-branch.sh <repo_root>` with both spelled literally; report `pushed: yes`, or `pushed: failed` when the helper reports a failure, which is not a commit failure. Otherwise `pushed: no`.
 
 ### ui_test_pass procedure
 
-This procedure runs none of steps 1–6 and has no clean-tree guard: the flip is its only change, so a clean tree before it is normal. Where it applies a standard step's rule, it names that step.
+The flip is its only change, so a clean tree before it is normal. Where it applies a standard step's rule, it names that step.
 
 a. **Branch:** `git branch --show-current` for `<branch>`.
 
 b. **Locate the entry:** read `plan_path` (the UI-test plan index, `<state_dir>/ui_test_plans/<branch>_ui_test_plan.md`) and, in its `## Phase 2 Readiness — Ordered Fix List`, resolve the `**Test K**` entry by the unit token `K` that `task_heading` carries — never by position; title text corroborates only. No entry carries that token → return `error: task_heading matched no readiness entry in <plan_path>` and stop: no edit, no commit, no push.
 
-c. **Before any edit:** that entry already `[x]` → return `noop: UI test K already marked` and stop: no edit, no commit, no push. This is the expected case on a re-test round.
+c. **Before any edit:** that entry already `[x]` → return `noop: UI test K already marked` and stop: no edit, no commit, no push.
 
-d. **Flip:** change that one `[ ]` to `[x]`, and nothing else — no other marker, sub-step bullets included.
+d. **Flip:** change that one `[ ]` to `[x]`, and nothing else.
 
 e. **Sanity, after the flip:** `git status --short` shows only `plan_path` modified.
 
-f. **Commit:** the subject is this mode's string from **Fixed-form subjects**, with `K` and `<branch>` substituted. Call the wrapper once:
+f. **Commit:** the subject is this mode's string from **Fixed-form subjects**, with `K` and `<branch>` substituted. Resolve `<repo_root>` and `<MAIN_REPO>` as step 4 does, and call the wrapper once, alone:
    ```
-   bash <scripts_dir>/commit-on-branch.sh <plan_path> -- "<the fixed ui_test_pass subject>"
+   bash <MAIN_REPO>/<scripts_dir>/commit-on-branch.sh --repo <repo_root> <plan_path> -- "<the fixed ui_test_pass subject>"
    ```
-   `plan_path` is the only path, passed exactly as the dispatch gave it — repo-relative, as step 3 requires, even though step b read it by an absolute path. Never `git add -A` / `git add .`, and no separate `git add` or `git commit`. Map the exit as step 4 does, exit 0 continuing to step g; exit 3 here means the flip produced no diff.
+   `plan_path` is the only path, passed as the dispatch gave it — repo-relative, as step 3 requires, though step b read it by an absolute path. Map the exit as step 4 does, exit 0 or the landed exit 1 continuing to step g; exit 3 here means the flip produced no diff.
 
 g. **Verify** as step 5 does.
 
-h. **Push** as step 6 does, only when `push == true` and step f committed; the step-c `noop:` path never pushes.
+h. **Push** as step 6 does, only when `push == true` and step f committed.
 
-i. **Return** the 5-line block in `## Output contract`, or step c's `noop:` line.
+i. **Return** the block in `## Output contract`, or step c's `noop:` line.
 
 ## Output contract
 
@@ -143,17 +144,21 @@ plan_flipped: <readiness entry that was flipped (story-index for task, review in
 pushed: <yes|no|failed>
 ```
 
-`pushed:` is `no` when `push` was not requested, `yes` on a successful push, and `failed` when the helper reported a failure — never a commit failure.
-
 The `already-[x]: <entry> — not flipped by this committer` form of `plan_flipped:` is **mandatory** whenever step 2 resolved `task_heading` to an entry already `[x]` (`task` / `review_item`). Never report `none`, and never the entry alone as if you had flipped it.
 
-**A sixth line**, emitted exactly when **Subject reconciliation**'s test answered **No** — with or without a `disposition` or `already_passing` argument — and omitted on every other commit:
+**A line**, emitted exactly when **Subject reconciliation**'s test answered **No** — with or without a `disposition` or `already_passing` argument — and omitted on every other commit:
 
 ```
 staged: index-only — <the step-3 stage-path set> was the whole diff; no work file was staged
 ```
 
 Name the set step 3 staged: `plan_path`, plus the unit's own detail file where staged (on a dispositioned unit, the one carrying `## Disposition`), plus `unit_findings_folder` where passed.
+
+**A line**, emitted exactly when step 4 took the landed exit 1 and its second call did not exit 3, or step 5 then found the tree not clean — the commit stands, so this is never an `error:`:
+
+```
+index_sync: failed — <the second call's exit and stderr line, or the `git status --short` entries left>
+```
 
 If `mode == ui_test_pass` and the target `**Test K**` entry was already `[x]`, do NOT commit — return:
 
@@ -167,6 +172,6 @@ If anything blocked the commit:
 error: <one-line description>
 ```
 
-The named `error:` returns are `error: task_heading required for mode <mode>` (argument guard at the top of **Process**), `error: task_heading matched no readiness entry in <plan_path>` (step 2 / `ui_test_pass` step b), and `error: nothing to commit` (step 1's clean-tree return for `review_plan_file`; step 2, when neither the tree nor the entry moved; or wrapper exit 3); every other wrapper non-zero exit is surfaced as one line. Each stops where it fires — no edit past that point, no commit, no push.
+The named `error:` returns are `error: task_heading required for mode <mode>` (argument guard at the top of **Process**), `error: task_heading matched no readiness entry in <plan_path>` (step 2 / `ui_test_pass` step b), and `error: nothing to commit` (step 1's clean-tree return for `review_plan_file`; step 2, when neither the tree nor the entry moved; or wrapper exit 3); every other wrapper non-zero exit but the landed exit 1 is surfaced as one line.
 
-Return 5 lines on success, 6 with the `staged: index-only` line, and one line for `noop:` / `error:` — neither commits, so neither carries `pushed:`.
+Return 5 lines on success, plus one for each of `staged: index-only` and `index_sync: failed`, and one line for `noop:` / `error:` — neither commits, so neither carries `pushed:`.
