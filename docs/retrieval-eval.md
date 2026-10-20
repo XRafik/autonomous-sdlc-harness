@@ -556,6 +556,85 @@ runs from, which is why it runs from the repository root. The write-up lives in
 `docs/retrieval-eval-results.md` → `## The Python backend against the TypeScript one`, and is not
 restated here.
 
+### The BM25 index-state probe
+
+Run by a maintainer re-taking `docs/retrieval-eval-results.md` → `## The BM25 index's state, measured`.
+It reads BM25 scores and the index's own statistics, never time, so its figures are not wall-clock figures
+and may be taken in a session. Its `--engine postgres` runs need the compose `postgres` service up: from
+`docs-retrieval-service/`, run
+
+```
+docker compose up -d --wait postgres
+```
+
+A probe run that cannot reach it refuses with `is the compose postgres service up?`. Create
+`harness-runs/scratch/bm25-history.mjs`:
+
+```
+import { runBm25HistoryLauncher } from '../../evals/docs-retrieval/bm25-history.mjs';
+await runBm25HistoryLauncher(process.argv.slice(2));
+```
+
+The states sequence holds one corpus in each index state, on one engine per run; `--engine` is `pglite`
+or `postgres`, `--corpus` a built-in corpus id:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-history.mjs --sequence states --engine pglite --corpus fixture-catalog
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-history.mjs --sequence states --engine postgres --corpus fixture-catalog
+```
+
+The history sequence writes a second corpus, named by `--other`, and deletes it:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-history.mjs --sequence history --engine pglite --corpus fixture-catalog --other self-docs
+```
+
+`--repeat <n>` scores each step's queries `n` times and lists every value a later repetition changes:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-history.mjs --sequence states --engine postgres --corpus self-docs --repeat 5
+```
+
+`--capture <path>` also writes the summary with every score, which is what `--compare` reads. Captures go
+under `harness-runs/scratch/bm25-history/`, which is gitignored. Take each run twice and compare the
+pair; a value the comparison lists is recorded as a one-run value, never dropped:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-history.mjs --sequence states --engine pglite --corpus self-docs --capture harness-runs/scratch/bm25-history/pglite-self-docs-1.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-history.mjs --sequence states --engine pglite --corpus self-docs --capture harness-runs/scratch/bm25-history/pglite-self-docs-2.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-history.mjs --compare harness-runs/scratch/bm25-history/pglite-self-docs-1.txt --compare harness-runs/scratch/bm25-history/pglite-self-docs-2.txt
+```
+
+`--reindex-cost` times one `REINDEX` and is an operator's hand run on an otherwise idle machine, outside
+any session; the branch that measured the index states did not run it.
+
+The refresh-level launcher re-takes `docs/retrieval-eval-results.md` →
+`### The candidate end-state rule, at refresh level`: it drives each backend's own refresh through six
+scenarios, issues the statement the candidate end-state rule decides after the last refresh, and compares
+the reading before and after it with fresh builds of the final corpus taken in the same run. `--backend`
+is `typescript` or `python`, `--corpus` the final corpus A and `--other` the corpus B a scenario holds
+first. Create `harness-runs/scratch/bm25-refresh-rule.mjs`:
+
+```
+import { runRefreshRuleLauncher } from '../../evals/docs-retrieval/bm25-refresh-rule.mjs';
+await runRefreshRuleLauncher(process.argv.slice(2));
+```
+
+The four runs, from the repository root:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend typescript --corpus fixture-catalog --other self-docs --capture harness-runs/scratch/bm25-history/refresh-rule-typescript-fixture-catalog-1.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend typescript --corpus self-docs --other fixture-catalog --capture harness-runs/scratch/bm25-history/refresh-rule-typescript-self-docs-1.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend python --corpus fixture-catalog --other self-docs --capture harness-runs/scratch/bm25-history/refresh-rule-python-fixture-catalog-1.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend python --corpus self-docs --other fixture-catalog --capture harness-runs/scratch/bm25-history/refresh-rule-python-self-docs-1.txt
+```
+
+Each `python` run was taken a second time into a `-2.txt` capture and the pair compared with the probe
+launcher's `--compare`, as above. The `python` runs have the preconditions of `### The Python backend`:
+the environment synced with the `models` extra, the weights fetched, and the compose `postgres` service
+up. The module creates and drops its own `bm25_refresh_rule_*` databases on the compose server, and
+removes its own corpus mirrors and PGlite data directories, on every exit path.
+
 ## The query-set format
 
 **This section is the only statement of the format.** `evals/docs-retrieval/queries/README.md` carries
