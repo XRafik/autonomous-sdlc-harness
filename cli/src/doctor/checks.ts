@@ -688,11 +688,12 @@ const RULE_WRAPPER = /^[A-Za-z]+\(([\s\S]*)\)$/;
  * The absolute path expressions inside one location string, each normalized to what it points at.
  *
  * Three shapes are handled at once because all three are in every generated profile: `Edit(//<abs>/**)`
- * and its `Write`/`Read` twins, whose leading `//` is the tool syntax marking an absolute path and is
- * collapsed here to the single slash the path itself carries; `Bash(bash <abs>/<script>:*)`, where the
- * path is the second whitespace-separated word and `:*` is the argument wildcard rather than part of
- * it; and a bare directory. A word not starting with `/` — `git`, `bash`, a repo-relative invocation —
- * names no root and is dropped.
+ * and its `Read` twin, whose leading `//` is the tool syntax marking an absolute path and is collapsed
+ * here to the single slash the path itself carries; `Bash(bash <abs>/<scripts>/<x>.sh:*)`, an exact
+ * absolute path, where the path is the second whitespace-separated word and `:*` is the argument
+ * wildcard rather than part of it; and a bare directory. The parser is generic over the wrapper, so a
+ * `Write(//…)` rule an earlier release's profile still carries is read the same way. A word not
+ * starting with `/` — `git`, `bash`, a repo-relative invocation — names no root and is dropped.
  */
 function absolutePathExpressions(entry: string): readonly string[] {
   const inner = RULE_WRAPPER.exec(entry)?.[1] ?? entry;
@@ -719,9 +720,11 @@ function segmentMatcher(segment: string): RegExp {
  *
  * - `<work>/<project>-*` against a sibling worktree `<work>/<project>-feature_x` — equal depth, and
  *   the wildcard segment is the whole point (`core/paths.ts`'s `worktreeGlob`, emitted unconditionally);
- * - a wrapper-script rule under that same pattern — `<work>/<project>-<wildcard>/scripts/test.sh` —
- *   against that same root: the expression is *deeper* than the root, and a script rule inside a
- *   checkout names that checkout;
+ * - a rule under that same pattern — `Edit(//<work>/<project>-<wildcard>/**)`, or the wrapper-script
+ *   rule `<work>/<project>-<wildcard>/scripts/test.sh` that only an earlier release's profile still
+ *   carries — against that same root: the expression is *deeper* than the root, and a rule inside a
+ *   checkout names that checkout. A run copy's root is covered by the base's `Edit(//<glob>/**)` and
+ *   `Read(//<glob>/**)` rules;
  * - `<work>/**` against `<work>/<project>` — the expression is *shallower*, and a rule spanning the
  *   directory above covers what is under it.
  *
@@ -4602,7 +4605,7 @@ function profileUntrackRemedy(ctx: CheckContext): string {
  * printed there. The remedy is {@link profileUntrackRemedy}, so the job generates its own.
  *
  * The question asked is "does any rule cover this root", not "is every path correct": a profile
- * generated here mentions the root in its edit, write and read rules, so its complete absence is the
+ * generated here mentions the root in its edit, read and script rules, so its complete absence is the
  * signal.
  *
  * "Cover" is deliberately not "contain" ({@link namesRoot}). A generated profile names two locations —
@@ -4624,7 +4627,7 @@ const PROFILE_PATHS_CHECK: Check = {
     const covered = locationStrings(ctx.profile).some((entry) => namesRoot(entry, ctx.repoRoot as string));
     if (!covered && ctx.remoteJob) {
       return fail(
-        `neither a path nor a pattern in ${PROFILE_PATH} covers this repository root (${ctx.repoRoot}): the profile was generated on another machine and committed, and this job's create-if-absent \`${CLI} init\` kept it, so a run loading it would find its edit, write, read and script rules matching nothing here. Stop tracking it so the job generates its own: ${profileUntrackRemedy(ctx)}`,
+        `neither a path nor a pattern in ${PROFILE_PATH} covers this repository root (${ctx.repoRoot}): the profile was generated on another machine and committed, and this job's create-if-absent \`${CLI} init\` kept it, so a run loading it would find its edit, read and script rules matching nothing here. Stop tracking it so the job generates its own: ${profileUntrackRemedy(ctx)}`,
       );
     }
     return covered
@@ -4632,7 +4635,7 @@ const PROFILE_PATHS_CHECK: Check = {
           `the profile's rules cover this repository root (${ctx.repoRoot}) — by naming it, or by a pattern such as the sibling-worktree glob that matches it — so they apply to this checkout`,
         )
       : warn(
-          `neither a path nor a pattern in ${PROFILE_PATH} covers this repository root (${ctx.repoRoot}): the profile was generated for another location, so a run loading it would find its edit, write, read and script rules matching nothing here — re-run \`${CLI} init --force\` from the checkout the profile should be generated for, which writes a .bak sibling before regenerating it`,
+          `neither a path nor a pattern in ${PROFILE_PATH} covers this repository root (${ctx.repoRoot}): the profile was generated for another location, so a run loading it would find its edit, read and script rules matching nothing here — re-run \`${CLI} init --force\` from the checkout the profile should be generated for, which writes a .bak sibling before regenerating it`,
         );
   },
 };
@@ -4880,13 +4883,16 @@ const PROFILE_SANDBOX_CHECK: Check = {
 
 /**
  * Is every path that runs outside the sandbox write-protected on both sides — a
- * `sandbox.filesystem.denyWrite` entry, and an `Edit` and a `Write` deny rule?
+ * `sandbox.filesystem.denyWrite` entry, and an `Edit` deny rule?
  *
  * The expected set is {@link protectedPaths} and {@link fileToolDenyRules}, the generator's own,
  * computed for the main checkout's root as {@link buildCheckContext} resolves the profile's location
  * and with the profile's own `permissions.additionalDirectories`, so this check and the generator
- * cannot disagree on which paths are protected. Under a taken opt-out ({@link sandboxOptedOut}) only
- * the file-tool rules are graded: with the sandbox off a `denyWrite` entry protects nothing.
+ * cannot disagree on which paths are protected. A `Write` rule is not required and is not reported,
+ * because the runtime never consults a `Write(path)` rule (`docs/sandbox-verification.md` → F4), so an
+ * earlier release's leftover `Write` rules are neither missing nor stale. Under a taken opt-out
+ * ({@link sandboxOptedOut}) only the file-tool rules are graded: with the sandbox off a `denyWrite`
+ * entry protects nothing.
  *
  * A `warn` rather than a `fail`, on {@link PROFILE_DENY_FLOOR_CHECK}'s terms: the profile is a file the
  * adopter owns and may deliberately have restructured, a run missing an entry is worse-defended
@@ -4950,10 +4956,10 @@ const PROFILE_WRITE_PROTECTION_CHECK: Check = {
     }
     return optedOut
       ? pass(
-          `${PROFILE_PATH} carries an Edit and a Write deny rule for each of the ${expected.length} paths that run outside the sandbox${notGraded}`,
+          `${PROFILE_PATH} carries an Edit deny rule for each of the ${expected.length} paths that run outside the sandbox${notGraded}`,
         )
       : pass(
-          `${PROFILE_PATH} write-protects each of the ${expected.length} paths that run outside the sandbox on both sides: a ${denyWritePath} entry, and an Edit and a Write deny rule. How the Linux sandbox treats a ${denyWritePath} entry containing * is unverified, so on Linux only the file-tool side is relied on for the globbed paths`,
+          `${PROFILE_PATH} write-protects each of the ${expected.length} paths that run outside the sandbox on both sides: a ${denyWritePath} entry, and an Edit deny rule. How the Linux sandbox treats a ${denyWritePath} entry containing * is unverified, so on Linux only the file-tool side is relied on for the globbed paths`,
         );
   },
 };
