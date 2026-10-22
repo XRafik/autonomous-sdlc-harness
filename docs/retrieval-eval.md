@@ -611,7 +611,11 @@ any session; the branch that measured the index states did not run it.
 The refresh-level launcher re-takes `docs/retrieval-eval-results.md` →
 `### The candidate end-state rule, at refresh level`: it drives each backend's own refresh through six
 scenarios, issues the statement the candidate end-state rule decides after the last refresh, and compares
-the reading before and after it with fresh builds of the final corpus taken in the same run. `--backend`
+the reading before and after it with fresh builds of the final corpus taken in the same run. On the
+TypeScript backend a `before` reading is the shipped end state, because its refresh issues
+`END_STATE_STATEMENTS` itself; on the Python backend it is still the state that backend's own refresh
+leaves (`docs/retrieval-eval-results.md` → `### Route 2 on the fix branch` → `#### The shipped end state
+at refresh level`). `--backend`
 is `typescript` or `python`, `--corpus` the final corpus A and `--other` the corpus B a scenario holds
 first. Create `harness-runs/scratch/bm25-refresh-rule.mjs`:
 
@@ -634,6 +638,37 @@ launcher's `--compare`, as above. The `python` runs have the preconditions of `#
 the environment synced with the `models` extra, the weights fetched, and the compose `postgres` service
 up. The module creates and drops its own `bm25_refresh_rule_*` databases on the compose server, and
 removes its own corpus mirrors and PGlite data directories, on every exit path.
+
+`--end-state` picks what follows each scenario's last refresh. `candidate`, the default, issues the
+statement the candidate rule decides, and is what the four runs above take. `route-2` measures the
+route `docs/retrieval-eval-results.md` → `### The recommendation for the fix branch` proposes: it issues
+`REINDEX INDEX chunks_bm25` after every scenario's last refresh, `unchanged` included, and still prints
+the candidate decision beside the statement issued. The route-2 runs, as
+`docs/retrieval-eval-results.md` → `### Route 2 on the fix branch` took them:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend typescript --end-state route-2 --corpus fixture-catalog --other self-docs --capture harness-runs/scratch/fix-bm25/route-2-typescript-fixture-catalog-1.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend typescript --end-state route-2 --corpus self-docs --other fixture-catalog --capture harness-runs/scratch/fix-bm25/route-2-typescript-self-docs-1.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend python --end-state route-2 --corpus fixture-catalog --other self-docs --capture harness-runs/scratch/fix-bm25/route-2-python-fixture-catalog-1.txt
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend python --end-state route-2 --corpus self-docs --other fixture-catalog --capture harness-runs/scratch/fix-bm25/route-2-python-self-docs-1.txt
+```
+
+Each `python` run is taken a second time into a `-2.txt` capture and the pair compared with the probe
+launcher's `--compare`, as above.
+
+Corpus A may instead be an **ad-hoc corpus**, which is how a catalog outside this repository is
+measured: `--repo`, `--docs-root`, `--conventions`, `--corpus-id` and `--queries`, given in place of
+`--corpus`. They are the eval's own flags, forwarded to `evals/docs-retrieval/args.mjs` and resolved
+as `## How to run it` states. `--other` stays a built-in id, and `--capture` resolves against this
+checkout:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/bm25-refresh-rule.mjs --backend typescript --end-state route-2 --repo <checkout> --docs-root <dir> --conventions <file> --corpus-id <id> --queries <file> --other fixture-catalog --capture harness-runs/scratch/fix-bm25/route-2-typescript-<id>-1.txt
+```
+
+A run refuses with `key <key> is in both <A> and <B>` when a chunk key is in both corpora; re-run with
+the other built-in id as `--other`. `docs/development.md` → `## 5. Verifying a change` → gate 10's leg
+(vii) is this form's run on a real catalog.
 
 ## The query-set format
 

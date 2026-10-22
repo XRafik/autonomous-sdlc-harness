@@ -28173,7 +28173,8 @@ suggests is input to a later decision by the maintainer, not a change made or qu
 **Who reads this, and what it decides.** The maintainer deciding the route of the branch that fixes the
 BM25 scores' dependence on the `chunks_bm25` index's state. This section records the index states, the
 score each state ranks by, what still differs after `REINDEX`, the stray index-scan score, the candidate
-end-state rule and whether either mechanism moves relevance. Every `self-docs` figure carries the
+end-state rule and whether either mechanism moves relevance, and, under `### Route 2 on the fix branch`,
+the figures the branch implementing route 2 took. Every `self-docs` figure carries the
 `{ files, chunks }` stamp of the runs that took it, and no comparison here crosses two stamps. The
 `pg_textsearch` source paths and issue numbers cited here are the leads of the task prompt that opened
 this work; none was re-read on the branch that measured them.
@@ -30720,6 +30721,921 @@ leaves (route 2, `### The recommendation for the fix branch`), which is the stat
 `(b)` measures, so this figure bounds the corpus size below which the store's lexical plan becomes a `Seq
 Scan`, for that suite's synthetic row width.
 
+### Route 2 on the fix branch
+
+**Who reads this, and what it decides.** The maintainer, and the next reader of the fix that implements
+route 2 (`### The recommendation for the fix branch`). This subsection holds the figures that branch took:
+route 2 measured at refresh level with its statement issued by hand, before any code changed; the
+real-catalog figure; the relevance and vector-arm figures before and after the fix; and the shipped end
+state read at refresh level. Its comparison rule is `### The deciding figures on pg_textsearch 1.5.1` →
+**The comparison rule.**, and its probe setup is `### How the probe reads a score, and the setup`; neither
+is restated here.
+
+#### Route 2 at refresh level, issued by hand
+
+**The outcome.** On both backends and both corpora, every scenario's `after` reading, `REINDEX INDEX
+chunks_bm25` issued after its last refresh, differs from `reference-reindex` on 0 hits in `scan` and in
+`operator`, in every run. That includes `unchanged`, where the candidate rule issues nothing, and
+`fresh` and `file-added`, where it issues the spill.
+
+**The setup.**
+
+- **The engines**, read by a scratch probe before the first run, each on a new database: PGlite
+  `PostgreSQL 18.6 (PGlite 0.5.10) on wasm32-unknown-emscripten`, and the compose Postgres `PostgreSQL 18.6
+  (Debian 18.6-1.pgdg12+2) on aarch64-unknown-linux-gnu`. On both, `SHOW pg_textsearch.library_version`
+  read `1.5.1`, and `pg_extension.extversion` read `pg_textsearch` `1.5.1` and `vector` `0.8.7`.
+- **The environment.** `npm run build` ran first. `bash scripts/python-service.sh sync --with-models`
+  synced this checkout's environment, and the Python weights were present under
+  `~/.cache/harness-docs-retrieval/models`; none was fetched. A bare `bash scripts/python-service.sh run
+  self-check` reported `ok` for packages and weights and `FAIL index`, with
+  `HARNESS_DOCS_RETRIEVAL_DATABASE_URL` unset; every `--backend python` run passed the module's own
+  availability check.
+- **The runs.** 2026-10-21, at commit `3dbf4b27` with a clean tree. They were the four refresh-level
+  commands of `docs/retrieval-eval.md` → `### The BM25 index-state probe`, each with `--end-state route-2`
+  added and `--capture` into a scratch file. Each `python` run was taken twice, six runs in all, and
+  `evals/docs-retrieval/bm25-refresh-rule.mjs` was not changed. All six ran before this part was written.
+  Every summary read `pg_textsearch: 1.5.1` and `end state: route-2`.
+- **The corpora.** `fixture-catalog` is at `{ files: 9, chunks: 41 }`, and at `{ files: 8, chunks: 36 }`
+  without `F` (`docs/webhooks.md`). `self-docs` is at `{ files: 71, chunks: 829 }`, and at `{ files: 70,
+  chunks: 818 }` without `F` (`docs/work-report-research/user-review-fix-plan-writer.md`), in all six runs.
+  The final corpus holds 219 hits on `fixture-catalog` and 198 without `F`, and 9636 and 9544 on
+  `self-docs`.
+- **The plans.** The probe plan was the `chunks_bm25` index scan in every reading of every run, so no
+  reading was re-scored.
+- **The columns** are those of `#### The candidate end-state rule, at refresh level, on 1.5.1`.
+  **Candidate decision** is the candidate rule's decision, computed and not issued. **Statement issued**
+  is what the run issued. Each `≠ ref` cell is `scan` / `operator` against `reference-reindex` of the
+  scenario's final-corpus variant.
+
+**TypeScript (PGlite), A `fixture-catalog`, B `self-docs`.**
+
+| Scenario | Last refresh | Candidate decision | Statement issued | `before` ≠ ref | `after` ≠ ref | Largest `after` difference | Store plan, before → after |
+|---|---|---|---|---|---|---|---|
+| `fresh` | embedded 41, unchanged 0, deleted 0 | `spill` (0, 41, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `other-corpus` | embedded 41, unchanged 0, deleted 829 | `reindex` (829, 41, 0) | `REINDEX` | 219 / 219 | 0 / 0 | — | Index scan → Index scan |
+| `file-added` | embedded 5, unchanged 36, deleted 0 | `spill` (0, 5, 0) | `REINDEX` | 9 / 0 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `file-edited` | embedded 1, unchanged 40, deleted 0 | `reindex` (0, 1, 1) | `REINDEX` | 219 / 219 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `file-removed` | embedded 0, unchanged 36, deleted 5 | `reindex` (5, 0, 0) | `REINDEX` | 198 / 198 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `unchanged` | embedded 0, unchanged 41, deleted 0 | `none` (0, 0, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | Index scan → **Seq Scan** |
+
+**Python (Postgres), A `fixture-catalog`, B `self-docs`.** Both runs read the same in every cell. Their
+`--compare` listed no value out of 7674 compared.
+
+| Scenario | Last refresh | Candidate decision | Statement issued | `before` ≠ ref | `after` ≠ ref | Largest `after` difference | Store plan, before → after |
+|---|---|---|---|---|---|---|---|
+| `fresh` | embedded 41, unchanged 0, deleted 0 | `spill` (0, 41, 0) | `REINDEX` | 136 / 0 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `other-corpus` | embedded 41, unchanged 0, deleted 829 | `reindex` (829, 41, 0) | `REINDEX` | 219 / 219 | 0 / 0 | — | Index scan → Index scan |
+| `file-added` | embedded 5, unchanged 36, deleted 0 | `spill` (0, 5, 0) | `REINDEX` | 136 / 0 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `file-edited` | embedded 1, unchanged 40, deleted 0 | `reindex` (0, 1, 1) | `REINDEX` | 219 / 219 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `file-removed` | embedded 0, unchanged 36, deleted 5 | `reindex` (5, 0, 0) | `REINDEX` | 198 / 198 | 0 / 0 | — | Index scan → **Seq Scan** |
+| `unchanged` | embedded 0, unchanged 41, deleted 0 | `none` (0, 0, 0) | `REINDEX` | 136 / 0 | 0 / 0 | — | Index scan → **Seq Scan** |
+
+**TypeScript (PGlite), A `self-docs` at `{ files: 71, chunks: 829 }`, B `fixture-catalog`.** Run once.
+
+| Scenario | Last refresh | Candidate decision | Statement issued | `before` ≠ ref | `after` ≠ ref | Largest `after` difference | Store plan, before → after |
+|---|---|---|---|---|---|---|---|
+| `fresh` | embedded 829, unchanged 0, deleted 0 | `spill` (0, 829, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `other-corpus` | embedded 829, unchanged 0, deleted 41 | `reindex` (41, 829, 0) | `REINDEX` | 9636 / 9636 | 0 / 0 | — | Index scan → Index scan |
+| `file-added` | embedded 11, unchanged 818, deleted 0 | `spill` (0, 11, 0) | `REINDEX` | 1 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `file-edited` | embedded 1, unchanged 828, deleted 0 | `reindex` (0, 1, 1) | `REINDEX` | 9636 / 9636 | 0 / 0 | — | Index scan → Index scan |
+| `file-removed` | embedded 0, unchanged 818, deleted 11 | `reindex` (11, 0, 0) | `REINDEX` | 9544 / 9542 | 0 / 0 | — | Index scan → Index scan |
+| `unchanged` | embedded 0, unchanged 829, deleted 0 | `none` (0, 0, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+
+**Python (Postgres), A `self-docs` at `{ files: 71, chunks: 829 }`, B `fixture-catalog`.** Where the two
+runs disagree, the cell reads run 1; run 2.
+
+| Scenario | Last refresh | Candidate decision | Statement issued | `before` ≠ ref | `after` ≠ ref | Largest `after` difference | Store plan, before → after |
+|---|---|---|---|---|---|---|---|
+| `fresh` | embedded 829, unchanged 0, deleted 0 | `spill` (0, 829, 0) | `REINDEX` | 240 / 0; 849 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `other-corpus` | embedded 829, unchanged 0, deleted 41 | `reindex` (41, 829, 0) | `REINDEX` | 9636 / 9636 | 0 / 0 | — | Index scan → Index scan |
+| `file-added` | embedded 11, unchanged 818, deleted 0 | `spill` (0, 11, 0) | `REINDEX` | 1199 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `file-edited` | embedded 1, unchanged 828, deleted 0 | `reindex` (0, 1, 1) | `REINDEX` | 9636 / 9636 | 0 / 0 | — | Index scan → Index scan |
+| `file-removed` | embedded 0, unchanged 818, deleted 11 | `reindex` (11, 0, 0) | `REINDEX` | 9544 / 9542 | 0 / 0 | — | Index scan → Index scan |
+| `unchanged` | embedded 0, unchanged 829, deleted 0 | `none` (0, 0, 0) | `REINDEX` | 849 / 0; 2210 / 0 | 0 / 0 | — | Index scan → Index scan |
+
+The pair's `--compare` listed 5617 values out of 345976 compared, every one in `scan`. They fall in
+`reference-insert` (611 full, 1611 without `F`), in `reference-spill` without `F` (1), and in the `before`
+readings of `fresh` (611), `file-edited` (136), `file-removed` (1282) and `unchanged` (1365). It listed
+none in `reference-reindex` of either variant, and none in any `after` reading. The counts in the
+`file-edited` and `file-removed` cells read alike in both runs even though some of their values moved.
+
+**The verdicts**, against `reference-reindex`:
+
+- **TypeScript, `fixture-catalog`: route 2 holds** in all six scenarios, at 0 hits in `scan` and in
+  `operator` after `REINDEX` (the first table).
+- **Python, `fixture-catalog`: route 2 holds** in all six scenarios, at 0 hits in both columns, in both
+  runs (the second table).
+- **TypeScript, `self-docs`: route 2 holds** in all six scenarios, at 0 hits in both columns (the third
+  table). This backend was run once, so no `--compare` names a one-run value.
+- **Python, `self-docs`: route 2 holds** in all six scenarios, at 0 hits in both columns, in both runs
+  (the fourth table). The values `--compare` lists are all in `before` readings and in references other
+  than `reference-reindex`.
+
+Every `after` reading leaves 1 segment and no memtable document, as `reference-reindex` does. That is 1
+segment of 41 documents on `fixture-catalog` (36 in `file-removed`), and of 829 on `self-docs` (818 in
+`file-removed`).
+
+**The `unchanged` scenario, read as an index the shipped code left.** Its last refresh changed nothing,
+so its `before` reading is the state the shipped refresh that preceded it left:
+
+- **TypeScript, `fixture-catalog`:** 0 memtable documents and 1 segment, read after a reopen. It reads
+  0 / 0 before, and 0 / 0 after `REINDEX`.
+- **TypeScript, `self-docs`:** 0 memtable documents beside 3 segments, read after a reopen. It reads
+  0 / 0 before, and after `REINDEX` 0 / 0 on 1 segment.
+- **Python, `fixture-catalog`:** 41 memtable documents and no segment, in both runs. It reads 136 / 0
+  before. The first listed are `q-fc-route-choice` → `docs/routing.md#cut-off-times` −3.756243 against
+  −3.773669, `docs/routing.md#how-a-route-is-chosen` −3.574759 against −3.627705, and
+  `docs/routing.md#zone-graph` −3.503895 against −3.564632. After `REINDEX` it reads 0 / 0.
+- **Python, `self-docs`:** 88 memtable documents beside 2 segments holding 741 in run 1, and 261 beside 1
+  holding 568 in run 2. It reads 849 / 0 and 2210 / 0 before, and 0 / 0 after `REINDEX` in both runs.
+
+So on every backend and corpus `REINDEX` brought the shipped code's end state to the reference, whatever
+that state held: memtable documents, more than one segment, or neither.
+
+**The store's `LIMIT 50` plan.** It was the `chunks_bm25` index scan in every `before` reading, on both
+backends and corpora. On `fixture-catalog`, on both backends, the `REINDEX` turned it to `Seq Scan on
+public.chunks` in five scenarios: `fresh`, `file-added`, `file-edited`, `file-removed` and `unchanged`.
+`reference-reindex` reads the same Seq Scan on both variants and both backends. The `REINDEX` of
+`other-corpus`, whose table held corpus B's 829 rows before the refresh, left the index scan on both
+backends. On `self-docs` every reading's store plan is the index scan. The crossover is 63 rows (`####
+The lexical-plan crossover, on 1.5.1`). `fixture-catalog` holds 41 chunks, 36 without `F`, and `self-docs`
+829, 818 without `F`.
+
+**Against the candidate rule.** The comparison is with `#### The candidate end-state rule, at refresh
+level, on 1.5.1`: value for value on `fixture-catalog`, at `{ files: 9, chunks: 41 }` in both, and
+structurally on `self-docs`, at `{ files: 71, chunks: 829 }` here and `826` there.
+
+- **`fresh` and `file-added`, where the candidate rule issued the spill:**
+  - On `fixture-catalog`, route 2 differs from the reference where the spill did: nowhere. Both read 0 / 0
+    after, on both backends. The `before` cells are the candidate run's values (TypeScript 0 / 0 and
+    9 / 0, Python 136 / 0 in both). What changes is the store plan after the statement. The spill left
+    the index scan, and `REINDEX` leaves the Seq Scan.
+  - On `self-docs`, the spill left a residual and `REINDEX` leaves none. There, TypeScript differed on 2
+    hits after the spill in `fresh` and 1 in `file-added`, and Python on 2; 1 and 8; 2. Here every one of
+    those cells reads 0 / 0, on both backends, in every run.
+- **`unchanged`, where the candidate rule issued nothing:** there, `none` differed wherever its `before`
+  reading did: Python `fixture-catalog` on 136 hits, TypeScript `self-docs` on 2, and Python `self-docs`
+  on 1166 and 1262. Here `REINDEX` reads 0 / 0 in every one of them.
+- **`other-corpus`, `file-edited` and `file-removed`, where both issue `REINDEX`:** 0 / 0 after, on both
+  backends and corpora, there and here. The `fixture-catalog` cells match value for value, except the
+  `other-corpus` decision's `deleted`. That is corpus B's chunk count, 829 here against 826.
+- **One structural difference in a `before` reading.** TypeScript `self-docs` `fresh` and `unchanged` read
+  0 / 0 before here, on 3 segments, against 2 / 0 there. The stamps differ, so this is recorded and not
+  attributed.
+
+#### The relevance eval's deterministic figures, before the fix
+
+**The outcome.** The fresh `fixture-catalog` run equals `#### The relevance eval's deterministic figures,
+on 1.5.1`: 36 of 36 figures, and every query's ordered refs, ranks and abstention, in arms B to E. Every
+row of `evals/docs-retrieval/floor.json` holds. On the `Seq Scan` plan a `REINDEX` leaves, 9 of the 36
+figures moved, all down: 5 in arm B and 4 in arm D. Arms C and E did not move. Arm B returned five rows,
+every one at score `0`, for the one query that carries no matching term, where the index scan returned
+none. `self-docs`, read from the base commit's snapshot at `{ files: 71, chunks: 829 }`, is the baseline
+the after-fix run compares with.
+
+**The setup.**
+
+- **The code.** 2026-10-21, at commit `625c57b4` with a clean tree, after `npm run build`. `git diff
+  --stat d15e5cc3 HEAD -- cli/src` lists nothing, so `cli/dist` is the base commit's retrieval code. The
+  TypeScript model cache under `~/.cache/autonomous-sdlc-harness/retrieval/models` held both models, and
+  none was fetched.
+- **The engine.** A scratch probe opened an in-memory PGlite with both extensions before the runs. It read
+  `version()` `PostgreSQL 18.6 (PGlite 0.5.10) on wasm32-unknown-emscripten`, `SHOW
+  pg_textsearch.library_version` `1.5.1`, and `pg_extension.extversion` `pg_textsearch` `1.5.1` and
+  `vector` `0.8.7`.
+- **The `self-docs` snapshot.** A scratch program wrote every file of commit `d15e5cc3` under `docs/`,
+  `.claude/context/`, `evals/docs-retrieval/queries/` and `harness.config.json`, 76 files, from `git
+  ls-tree -r --name-only` and `git show`, into a scratch directory, and removed it once the readings
+  below were taken. The runs read it as `--repo`. Its stamp is `{ files: 71, chunks: 829 }`, with 15
+  positive and 5 negative queries.
+- **The runs**, each through the launcher `harness-runs/scratch/eval.mjs` (`docs/retrieval-eval.md` →
+  `## How to run it`), on the TypeScript backend, with `--repeat 1`. Each `--out` file was a scratch file
+  holding only the two generated-region markers, so this document's generated region and
+  `evals/docs-retrieval/floor.json` are untouched. All ran before this part was written.
+
+  ```
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --data-dir harness-runs/scratch/fix-bm25/before-fixture-catalog --out harness-runs/scratch/fix-bm25/before-fixture-catalog.md --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --repo harness-runs/scratch/fix-bm25/base-corpus --corpus self-docs --out ../before-self-docs.md --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --data-dir harness-runs/scratch/fix-bm25/before-fixture-catalog --out harness-runs/scratch/fix-bm25/before-fixture-catalog-seqscan.md --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --repo harness-runs/scratch/fix-bm25/base-corpus --corpus self-docs --data-dir ../before-self-docs-plan --arms B --repeat 1
+  ```
+
+  The first `fixture-catalog` run went into a data directory that did not exist yet. Between it and the
+  second, a scratch program issued `BM25_HISTORY_STATEMENTS.reindex` on that directory
+  (`evals/docs-retrieval/bm25-history.mjs`). The second run's refresh wrote nothing
+  (`cli/src/retrieval/refresh.ts` → `refreshIndex`, step (5)), so it ranks with the shipped
+  `lexicalSearch` on the `REINDEX` state's plan. The `self-docs` run of record was held in memory, so
+  its plan could not be read afterwards. The fourth command, arm B only and with no `--out`, persisted the
+  same snapshot only so that its plan could be read. Its arm B figures equal the in-memory run's.
+- **The provenance**, as every block reads: host `darwin 24.6.0`, Node `v22.23.2`, embedder
+  `Xenova/bge-small-en-v1.5:q8:cls:384:v1`, reranker `Xenova/ms-marco-MiniLM-L-6-v2:q8:sigmoid:v1`,
+  abstention threshold `0.32`, `k` 5, `--repeat 1`. The stub was unset.
+- **The stamps.** `fixture-catalog` at `{ files: 9, chunks: 41 }`, 9 positive and 3 negative queries, in
+  both of its runs (`generatedAt` `2026-10-21T16:46:08.867Z` fresh, `2026-10-21T16:46:51.243Z` on the Seq
+  Scan plan). `self-docs` at `{ files: 71, chunks: 829 }` from `d15e5cc3` (`generatedAt`
+  `2026-10-21T16:47:34.043Z`).
+
+**The plans**, each read by a scratch program through `openPgliteEngine` on the run's data directory, with
+`BM25_HISTORY_STATEMENTS.explainStore` bound to the corpus's first query and `ARM_CANDIDATES` (50), and
+`summarize`:
+
+- **`fixture-catalog`, after the fresh run:** `->  Index Scan using chunks_bm25 on public.chunks`. The
+  summary read `total_docs: 41`, memtable `documents: 0`, `Total: 1 segments, 5 pages (0.0MB), 649 terms,
+  41 docs`, on-disk 73728 bytes.
+- **`fixture-catalog`, after `REINDEX`:** `->  Seq Scan on public.chunks`, under a `Sort` whose key is the
+  operator expression. The summary read the same counts, 1 segment of 41 docs, on-disk 57344 bytes. Read
+  again after the third run, the plan and the counts were the same.
+- **`self-docs`, after the fourth run:** `->  Index Scan using chunks_bm25 on public.chunks`. The summary
+  read `total_docs: 829`, memtable `documents: 0`, `Total: 3 segments, 219 pages (1.7MB), 22658 terms,
+  829 docs`.
+
+**`fixture-catalog`, fresh.** Every value equals the generated region's unkeyed `fixture-catalog` block,
+which `#### The relevance eval's deterministic figures, on 1.5.1` compared with too. Every query's ordered
+refs, rank, strict rank and abstention are equal as well.
+
+| Arm | recall@1 | recall@3 | recall@5 | MRR | strict recall@1 | strict recall@3 | strict recall@5 | strict MRR | abstained, of 3 negatives |
+|---|---|---|---|---|---|---|---|---|---|
+| B `lexical` | 0.444 | 0.889 | 1.000 | 0.657 | 0.444 | 0.778 | 1.000 | 0.606 | 0 |
+| C `vector` | 0.778 | 1.000 | 1.000 | 0.889 | 0.667 | 0.889 | 1.000 | 0.806 | 0 |
+| D `fused` | 0.556 | 1.000 | 1.000 | 0.759 | 0.444 | 1.000 | 1.000 | 0.685 | 0 |
+| E `fused-rerank` | 0.444 | 0.667 | 0.667 | 0.556 | 0.444 | 0.667 | 0.667 | 0.556 | 3 |
+
+**`self-docs`, from the `d15e5cc3` snapshot, at `{ files: 71, chunks: 829 }`.** The 1.5.1 part's run
+carries `{ files: 71, chunks: 826 }`, so these are not compared with it value for value.
+
+| Arm | recall@1 | recall@3 | recall@5 | MRR | strict recall@1 | strict recall@3 | strict recall@5 | strict MRR | abstained, of 5 negatives |
+|---|---|---|---|---|---|---|---|---|---|
+| B `lexical` | 0.400 | 0.533 | 0.667 | 0.497 | 0.200 | 0.333 | 0.467 | 0.286 | 0 |
+| C `vector` | 0.533 | 0.533 | 0.533 | 0.533 | 0.200 | 0.267 | 0.267 | 0.233 | 0 |
+| D `fused` | 0.533 | 0.600 | 0.733 | 0.589 | 0.200 | 0.467 | 0.600 | 0.344 | 0 |
+| E `fused-rerank` | 0.400 | 0.600 | 0.667 | 0.517 | 0.267 | 0.467 | 0.600 | 0.400 | 4 |
+
+**`fixture-catalog` on the Seq Scan plan, beside its fresh run.** Each cell reads fresh → Seq Scan; a
+figure in bold moved.
+
+| Arm | recall@1 | recall@3 | recall@5 | MRR | strict recall@1 | strict recall@3 | strict recall@5 | strict MRR | abstained, of 3 negatives |
+|---|---|---|---|---|---|---|---|---|---|
+| B `lexical` | **0.444 → 0.333** | 0.889 → 0.889 | 1.000 → 1.000 | **0.657 → 0.602** | **0.444 → 0.333** | **0.778 → 0.667** | 1.000 → 1.000 | **0.606 → 0.541** | 0 → 0 |
+| C `vector` | 0.778 → 0.778 | 1.000 → 1.000 | 1.000 → 1.000 | 0.889 → 0.889 | 0.667 → 0.667 | 0.889 → 0.889 | 1.000 → 1.000 | 0.806 → 0.806 | 0 → 0 |
+| D `fused` | **0.556 → 0.444** | 1.000 → 1.000 | 1.000 → 1.000 | **0.759 → 0.704** | **0.444 → 0.333** | 1.000 → 1.000 | 1.000 → 1.000 | **0.685 → 0.630** | 0 → 0 |
+| E `fused-rerank` | 0.444 → 0.444 | 0.667 → 0.667 | 0.667 → 0.667 | 0.556 → 0.556 | 0.444 → 0.444 | 0.667 → 0.667 | 0.667 → 0.667 | 0.556 → 0.556 | 3 → 3 |
+
+Every query whose ordered refs differ between the two runs, of the 12 in each of arms B to E:
+
+| Arm | Query | Fresh refs | Seq Scan refs | Rank, strict rank |
+|---|---|---|---|---|
+| B | `q-fc-unreadable-label` | `docs/labels.md`, `docs/INDEX.md`, `docs/labels.md#when-a-label-is-rejected`, `docs/depot-operations.md#inbound-scanning`, `docs/labels.md#the-routing-barcode` | `docs/labels.md`, `docs/INDEX.md`, `docs/depot-operations.md#inbound-scanning`, `docs/labels.md#when-a-label-is-rejected`, `docs/labels.md#the-routing-barcode` | 3, 3 → 3, 4 |
+| B | `q-fc-token-lifetime` | `docs/api-auth.md#token-exchange`, `#rotating-a-key`, `#scopes`, `#api-keys`, `docs/rates.md#volumetric-weight` | `docs/api-auth.md#rotating-a-key`, `#token-exchange`, `#scopes`, `#api-keys`, `docs/rates.md#volumetric-weight` | 1, 1 → 2, 2 |
+| B | `q-fc-negative-lattice` (negative) | none | `docs/INDEX.md`, `docs/api-auth.md`, `docs/api-auth.md#api-keys`, `#token-exchange`, `#scopes` | — |
+| D | `q-fc-token-lifetime` | `docs/api-auth.md#token-exchange`, `#rotating-a-key`, `#api-keys`, `#scopes`, `docs/webhooks.md#replaying-missed-events` | `docs/api-auth.md#rotating-a-key`, `#token-exchange`, `#api-keys`, `#scopes`, `docs/webhooks.md#replaying-missed-events` | 1, 1 → 2, 2 |
+| D | `q-fc-negative-recruitment` (negative) | `docs/exceptions.md#redelivery-attempts`, `docs/webhooks.md#signature-verification`, `docs/webhooks.md#delivery-and-retries`, `docs/tracking.md#estimated-delivery-window`, `docs/exceptions.md#claims-for-a-lost-parcel` | `docs/exceptions.md#redelivery-attempts`, `docs/webhooks.md#signature-verification`, `docs/tracking.md#estimated-delivery-window`, `docs/webhooks.md#delivery-and-retries`, `docs/exceptions.md#claims-for-a-lost-parcel` | — |
+| D | `q-fc-negative-lattice` (negative) | `docs/labels.md#label-anatomy`, `docs/labels.md#printing-and-label-stock`, `docs/webhooks.md#delivery-and-retries`, `docs/depot-operations.md#bay-numbering`, `docs/rates.md#rate-cards` | `docs/api-auth.md#scopes`, `docs/depot-operations.md#bay-numbering`, `docs/api-auth.md#rotating-a-key`, `docs/INDEX.md`, `docs/labels.md#label-anatomy` | — |
+
+A `#…` entry continues the path of the entry before it. No query's refs differ in arm C or arm E.
+
+**The rows the lexical arm returned for a query carrying no matching term.** `q-fc-negative-lattice`
+(*"quantum chromodynamics lattice spacing"*) returned no row in arm B on the index scan. On the Seq Scan
+plan arm B returned `docs/INDEX.md`, `docs/api-auth.md`, `docs/api-auth.md#api-keys`,
+`docs/api-auth.md#token-exchange` and `docs/api-auth.md#scopes`. On the same data directory, the store's
+ordering expression bound to that query scored all 41 rows `0`, and `count(*) FILTER (WHERE … <> 0)` read
+`0`. The five rows are the first five that ordering returned, so every one is a score-`0` row with no
+query term. Through fusion, they are why arm D's refs for that query changed. The other two negatives
+returned five rows in arm B on both plans, with the same refs.
+
+**The two positive reorderings, read on the Seq Scan state.** There the operator scored
+`docs/api-auth.md#rotating-a-key` `-8.307983` and `docs/api-auth.md#token-exchange` `-8.281486` for
+`q-fc-token-lifetime`. It scored `docs/depot-operations.md#inbound-scanning` `-5.534851` and
+`docs/labels.md#when-a-label-is-rejected` `-5.514854` for `q-fc-unreadable-label`. The fresh index
+scan's scores for those rows were not read before the `REINDEX`, so these swaps are recorded and not
+attributed.
+
+**The floor, by reading.** Each `evals/docs-retrieval/floor.json` row against the fresh `fixture-catalog`
+run, with the Seq Scan run beside it for reference. None is breached in either:
+
+| Arm | Metric | Floor | Fresh | Seq Scan |
+|---|---|---|---|---|
+| B | recall@5 | 0.95 | 1.000 | 1.000 |
+| B | MRR | 0.60 | 0.657 | 0.602 |
+| C | recall@5 | 0.95 | 1.000 | 1.000 |
+| C | MRR | 0.83 | 0.889 | 0.889 |
+| D | recall@5 | 0.95 | 1.000 | 1.000 |
+| D | MRR | 0.70 | 0.759 | 0.704 |
+| E | recall@5 | 0.61 | 0.667 | 0.667 |
+| E | MRR | 0.50 | 0.556 | 0.556 |
+
+#### The vector arm after a refresh with deletes, before the fix
+
+**The outcome.** The diagnosis's two short lists recur in the held-another state as built, on both data
+directories: arm C returned 3 refs for `q-fc-verify-callback` and 0 for `q-fc-negative-lattice`. After
+`REINDEX INDEX chunks_bm25` alone, arm C returned 5 refs on all 12 queries, each query's ordered refs equal
+to the fresh `fixture-catalog` run of `#### The relevance eval's deterministic figures, before the fix`. It
+did the same after `REINDEX INDEX chunks_hnsw` as well, and after `VACUUM chunks` followed by `REINDEX INDEX
+chunks_bm25`. On this corpus those full lists come from the plan, not from the vector index. After every
+statement the planner answered the vector statement with a `Seq Scan on chunks` under a `Sort`. Forced onto
+`chunks_hnsw` after `REINDEX INDEX chunks_bm25` alone, the graph still returned 7 to 32 of the 41 live rows.
+
+**The setup.**
+
+- **The code.** 2026-10-21, at commit `e26228ef` with a clean tree, after `npm run build`. `git diff --stat
+  d15e5cc3 HEAD -- cli/src` lists nothing, so `cli/dist` is the base commit's retrieval code.
+- **The engine.** A scratch probe opened an in-memory PGlite with both extensions before the runs. It read
+  `version()` `PostgreSQL 18.6 (PGlite 0.5.10) on wasm32-unknown-emscripten`, `SHOW
+  pg_textsearch.library_version` `1.5.1`, and `pg_extension.extversion` `pg_textsearch` `1.5.1` and
+  `vector` `0.8.7`.
+- **The states.** Each was built as `### Whether either mechanism moves relevance` built held-another, with
+  the live `self-docs` corpus supplying the dead rows. Every command ran from the repository root through
+  the launcher `harness-runs/scratch/eval.mjs` (`docs/retrieval-eval.md` → `## How to run it`), on the
+  TypeScript backend, with `--repeat 1`. Each `fixture-catalog` `--out` was a scratch file holding only
+  the two generated-region markers, so this document's generated region and
+  `evals/docs-retrieval/floor.json` are untouched. All ran before this part was written.
+
+  ```
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus self-docs --data-dir harness-runs/scratch/fix-bm25/held-1 --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --data-dir harness-runs/scratch/fix-bm25/held-1 --out harness-runs/scratch/fix-bm25/held-1-a.md --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus self-docs --data-dir harness-runs/scratch/fix-bm25/held-2 --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --data-dir harness-runs/scratch/fix-bm25/held-2 --out harness-runs/scratch/fix-bm25/held-2-a.md --repeat 1
+  ```
+
+  Each statement was issued through `harness-runs/scratch/fix-bm25/pglite-statement.mjs` as
+  `sql:<statement>`. After each, the `fixture-catalog` command ran again on the same `--data-dir`, into
+  `held-1-b.md`, `held-1-c.md` and `held-2-b.md`. Its refresh wrote nothing (`cli/src/retrieval/refresh.ts`
+  → `refreshIndex`, step (5)), so each run ranks over the state the statement left. `held-2`'s `VACUUM
+  chunks` and `REINDEX INDEX chunks_bm25` were issued back to back, with one eval run after the pair.
+- **The provenance**, as every block reads: host `darwin 24.6.0`, Node `v22.23.2`, embedder
+  `Xenova/bge-small-en-v1.5:q8:cls:384:v1`, reranker `Xenova/ms-marco-MiniLM-L-6-v2:q8:sigmoid:v1`,
+  abstention threshold `0.32`, `k` 5, `--repeat 1`. The stub was unset.
+- **The stamps.** Each `self-docs` run read `{ files: 71, chunks: 830 }`, from the live tree.
+  `fixture-catalog` read `{ files: 9, chunks: 41 }`, 9 positive and 3 negative queries, in every run.
+  The `generatedAt` values were: `held-1` as built `2026-10-21T16:55:19.091Z`, after `REINDEX INDEX
+  chunks_bm25` `16:56:28.529Z`, after `REINDEX INDEX chunks_hnsw` `16:57:13.931Z`; `held-2` as built
+  `16:58:52.896Z`, after the pair `16:59:20.588Z`.
+- **The readings.** A scratch program opened the data directory through `evals/docs-retrieval/bm25-history.mjs`
+  → `openPgliteEngine` before and after each statement, with no eval run between the two. It read:
+  - `SELECT count(*) FROM chunks`;
+  - `pg_relation_size` and `pg_class.relpages` / `reltuples` of `chunks`, `chunks_bm25` and `chunks_hnsw`;
+  - `bm25_summarize_index('chunks_bm25')`;
+  - `SHOW hnsw.ef_search`, which read `40`, and `SHOW hnsw.iterative_scan`, which read `off`, in every
+    reading;
+  - the vector statement's plan, `EXPLAIN (COSTS OFF)` of the store's `vectorSearch` statement
+    (`cli/src/retrieval/store.ts`) with a constant vector and a literal `LIMIT 50`, `ARM_CANDIDATES`;
+  - `BM25_HISTORY_STATEMENTS.explainStore` bound to the first query and `ARM_CANDIDATES`.
+
+  pgvector exposes no index summary, and `pg_stat_user_tables` read `0` in every column of every reading,
+  so the readings carry no dead-tuple count. Two readings were taken again after the eval run that followed
+  them, to add columns, and their other values equal the first reading's: `held-1` after `REINDEX INDEX
+  chunks_bm25` gained the `pg_class` and lexical-plan readings, and `held-1` after `REINDEX INDEX
+  chunks_hnsw` gained the forced count. That eval run's refresh wrote nothing.
+- **The candidate count**, the reading that tests the hypothesis. For each of the 41 live rows, it counts
+  the rows the store's vector statement returns at `LIMIT 50` with that row's own embedding as the query.
+  It was read four ways, each with session-only `SET`s: on the planner's plan, and with `enable_seqscan`
+  and `enable_sort` off, which put the statement on `Index Scan using chunks_hnsw`; each at `ef_search`
+  `40` and `1000`. The eval's own query embeddings were not run through it.
+- **Two readings came from a third directory.** The as-built `held-1` reading predates the `pg_class`,
+  lexical-plan and forced-count readings, which were added after it; `held-2`'s as-built reading carries
+  them. Its eval figures and every query's ordered refs equal `held-1`'s in arms B to E. The forced count
+  after `REINDEX INDEX chunks_bm25` alone was taken on `held-3`. That directory was built with the same two
+  commands, with `--arms B` and no `--out`, and given `REINDEX INDEX chunks_bm25` alone. Every other
+  reading on it equals `held-1`'s after the same statement.
+
+**The readings, per state.** "Forced" is the candidate count with `enable_seqscan` and `enable_sort` off.
+Each count cell gives the range over the 41 queries.
+
+| State | Statement before | `count(*)` | `chunks` relpages / reltuples | `chunks_bm25` summary | `chunks_bm25` / `chunks_hnsw` bytes | Vector plan | Lexical plan | Planner count, ef 40 | Forced count, ef 40 | Forced count, ef 1000 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `held-1` | none, as built | 41 | not read | `total_docs` 871, 4 segments, 871 docs | 4890624 / 1794048 | `Index Scan using chunks_hnsw` | not read | 7–32 | not read | not read |
+| `held-2` | none, as built | 41 | 0 / -1 | `total_docs` 871, 4 segments, 871 docs | 4890624 / 1794048 | `Index Scan using chunks_hnsw` | `Index Scan using chunks_bm25` | 7–32 | 7–32 | 41 |
+| `held-1` | `REINDEX INDEX chunks_bm25` | 41 | 185 / 41 | `total_docs` 41, 1 segment, 41 docs | 57344 / 1794048 | `Seq Scan on chunks`, under `Sort` | `Index Scan using chunks_bm25` | 41 | 7–32, on `held-3` | 41, on `held-3` |
+| `held-1` | then `REINDEX INDEX chunks_hnsw` | 41 | 185 / 41 | unchanged | 57344 / 98304 | `Seq Scan on chunks`, under `Sort` | `Index Scan using chunks_bm25` | 41 | 40 | 41 |
+| `held-2` | `VACUUM chunks` | 41 | 185 / 41 | `total_docs` 428, 2 segments, 428 docs (alive=41, dead=387) | 4890624 / 1794048 | `Seq Scan on chunks`, under `Sort` | `Seq Scan on public.chunks`, under `Sort` | 41 | 40 | 41 |
+| `held-2` | then `REINDEX INDEX chunks_bm25` | 41 | 185 / 41 | `total_docs` 41, 1 segment, 41 docs | 57344 / 1794048 | `Seq Scan on chunks`, under `Sort` | `Index Scan using chunks_bm25` | 41 | 40 | 41 |
+
+The as-built count's distribution, identical on both directories and, forced, on `held-3`: 7 rows for 2
+queries, 9 for 1, 11 for 2, 12 for 1, 13 for 2, 14 for 1, 15 for 3, 16 for 3, 18 for 2, 19 for 2, 20 for 4,
+22 for 3, 24 for 2, 26 for 2, 27 for 4, 28 for 1, 29 for 3, 31 for 2, 32 for 1. `chunks_hnsw`'s relpages /
+reltuples read 2 / 0 until a statement rewrote them: 12 / 41 after its `REINDEX`, 219 / 41 after `VACUUM`.
+
+**Arm C, per state.** Ref counts of the 12 queries, and how many have ordered refs, rank, strict rank and
+abstention equal to the fresh run.
+
+| State | Statement before | `q-fc-verify-callback` refs | `q-fc-negative-lattice` refs | The other 10 queries | Equal to fresh |
+|---|---|---|---|---|---|
+| `held-1` | none, as built | 3 | 0 | 5 each | 10 of 12 |
+| `held-2` | none, as built | 3 | 0 | 5 each | 10 of 12 |
+| `held-1` | `REINDEX INDEX chunks_bm25` | 5 | 5 | 5 each | 12 of 12 |
+| `held-1` | then `REINDEX INDEX chunks_hnsw` | 5 | 5 | 5 each | 12 of 12 |
+| `held-2` | `VACUUM chunks`, then `REINDEX INDEX chunks_bm25` | 5 | 5 | 5 each | 12 of 12 |
+
+As built, `q-fc-verify-callback` returned `docs/webhooks.md#replaying-missed-events`,
+`docs/webhooks.md#signature-verification` and `docs/api-auth.md#rotating-a-key`, the fresh run's first three in
+its order, and its rank and strict rank stayed 2. No arm C figure moved in any state: 0.778, 1.000, 1.000,
+0.889, strict 0.667, 0.889, 1.000, 0.806, 0 abstained.
+
+**The comparison, arms B, D and E, each state against the fresh run.**
+
+- **As built, on both directories**, arms B and D move as the diagnosis's held-another row did:
+  - arm B: recall@3 0.8889 → 1.0000, MRR 0.6574 → 0.7037, strict recall@1 0.4444 → 0.3333, strict recall@3
+    0.7778 → 0.8889, strict MRR 0.6056 → 0.5648, with 11 of 12 queries' refs differing;
+  - arm D: MRR 0.7593 → 0.7778, strict recall@1 0.4444 → 0.3333, strict MRR 0.6852 → 0.6481, with 10 of 12
+    differing, `q-fc-negative-lattice`'s list empty among them.
+
+  Arm E's figures and refs equal the fresh run. It made 11 rerank calls against the fresh run's 12, as
+  arm D's list for `q-fc-negative-lattice` was empty.
+- **After each statement, in all three statement states**, the figures and refs are the same:
+  - arm B: recall@1 0.4444 → 0.3333, MRR 0.6574 → 0.6019, strict recall@1 0.4444 → 0.3333, strict recall@3
+    0.7778 → 0.6667, strict MRR 0.6056 → 0.5407;
+  - arm D: recall@1 0.5556 → 0.4444, MRR 0.7593 → 0.7037, strict recall@1 0.4444 → 0.3333, strict MRR
+    0.6852 → 0.6296.
+
+  Those are the previous part's Seq Scan run's values, equal unrounded. The refs differ from the fresh run on 2
+  queries in each arm, the same pairs that part records:
+  - arm B: the `q-fc-token-lifetime` pair `#token-exchange` / `#rotating-a-key` (rank 1 → 2) and
+    `q-fc-unreadable-label`'s `#when-a-label-is-rejected` / `#inbound-scanning` (strict rank 3 → 4);
+  - arm D: `q-fc-token-lifetime` (rank 1 → 2) and `q-fc-negative-recruitment`'s third and fourth refs.
+
+  Unlike that run, arm B returned no row for `q-fc-negative-lattice`. The lexical plan here read `Index
+  Scan using chunks_bm25` after each `REINDEX INDEX chunks_bm25`, over a heap of 185 pages. Arm E equals the
+  fresh run, with 12 rerank calls. The `held-1` runs before and after `REINDEX INDEX chunks_hnsw` are equal
+  in every arm, figure and ref, as are `held-1` after `REINDEX INDEX chunks_bm25` and `held-2` after the
+  pair.
+
+**The hypothesis: supported.** The task prompt's hypothesis is that the HNSW scan filters out dead tuples
+after its candidate limit. Forced onto `chunks_hnsw` over the 830 dead entries the refresh left, the
+statement returned 7 to 32 of the 41 live rows at `ef_search` 40, and 41 at `ef_search` 1000. After
+`REINDEX INDEX chunks_hnsw`, and after `VACUUM chunks`, it returned 40, the `ef_search` value, for every
+query. After `REINDEX INDEX chunks_bm25` alone it still
+returned 7 to 32. The eval's two short lists were read through the planner's plan only, not through the
+forced count. So the support rests on row-embedding queries, and the 3 and 0 are consistent with it
+rather than reproduced by it. A separate reading, recorded and not acted on: on the `chunks_hnsw` plan
+with `iterative_scan` `off`, the statement returns at most `ef_search` rows, 40, against `ARM_CANDIDATES`
+50, with no dead row present.
+
+**The decision.** No vector-index statement joins the end state on this branch; the end state is `REINDEX
+INDEX chunks_bm25` alone. These states are taken on the 41-chunk `fixture-catalog`. A fixture-sized figure
+justifies no design decision (`harness-runs/lessons.md` → `## Evidence and measurement`, the first rule).
+The real-shape step this branch ships, gate 10's leg (vii), takes no arm C reading after deletes, and
+`--reindex-cost` times the BM25 `REINDEX` only. Arm C already returns full lists after `REINDEX INDEX
+chunks_bm25` alone: on this corpus the shipped end state restores them, and nothing is proposed. That
+restoration comes from the plan. `chunks`' reltuples read -1 as built (on `held-2`) and 41 after `REINDEX
+INDEX chunks_bm25`, and the planner then answered the vector statement with a `Seq Scan`. Forced onto
+`chunks_hnsw` in that state, the count still read 7 to 32. Arm C's lists after deletes on a corpus whose vector statement stays on
+`Index Scan using chunks_hnsw` are therefore unmeasured. That question stays open on the shipped end
+state.
+
+#### Route 2 on the real catalog
+
+**The outcome.** In five of the six scenarios, the `after` reading differs from `reference-reindex` on 0
+hits in `scan` and 0 in `operator`. Those five are `fresh`, `file-added`, `file-edited`, `file-removed` and
+`unchanged`. In `other-corpus` the `after` reading differs on **1 hit in `scan`** and 0 in `operator`. So
+on this catalog, route 2 does not hold value for value in `other-corpus`'s `scan` column. This is gate 10's
+leg (vii) (`docs/development.md` → `## 5. Verifying a change` → **Gate 10**), on the TypeScript backend
+only. The run falls under the leg's ~1,500-chunk floor and is on a different snapshot from the catalog's
+earlier runs. The maintainer accepted both gaps, which **The gaps, as ruled** records. The leg was run
+twice, and the `other-corpus` difference recurred exactly. The maintainer ruled that the fix (Tasks 7–12)
+goes ahead with that hit recorded and not attributed.
+
+**The gaps, as ruled.** Under the leg's own text, *"a run under the floor is invalid"*. The maintainer
+ruled on this run and directed that it be taken as it is, with both gaps recorded:
+
+- **Under the floor.** Corpus A reads `{ files: 105, chunks: 1454 }`, which is under the ~1,500-chunk
+  floor.
+- **A different snapshot.** The catalog is at commit `dce0de74e`, not gate 10's `010c50e`
+  (`{ files: 156, chunks: 1960 }`), and the docs layout has changed. That stamp was taken with `docs.root`
+  `docs` (the `gate10-catalog` corpus block's **Provenance.**). This run takes `--docs-root expause_web/docs`, and every key it
+  prints begins `expause_web/docs/` or `.claude/context/`. Every label in
+  `evals/docs-retrieval/queries/gate10-catalog.jsonl` begins `docs/expause-web/` or `docs/vite/`. The
+  probe scores every hit whatever the labels say, so the query set supplies query text only.
+- **The missing commits.** Neither `010c50e` nor `57a6c25` exists in the local catalog checkout, or in a
+  fresh clone of the catalog's remote, on any branch.
+- **The `other-corpus` hit.** After the first run's 1-hit `scan` difference, the maintainer directed a
+  second run. It recurred exactly, and the maintainer ruled that the fix proceeds with the hit recorded and
+  not attributed.
+
+By the stamp rule, nothing here is compared value for value with any other `gate10-catalog` figure.
+
+**The setup.**
+
+- **Who ran it, and when.** On 2026-10-21, by hand, in an interactive session the maintainer directed,
+  from this checkout's root after `npm run build`. It was run twice with the same command apart from
+  `--capture`. The module printed `ran 2026-10-21T17:08:09.752Z` for run 1 and
+  `ran 2026-10-21T18:19:41.715Z` for run 2. Each exited 0 and raised no collision refusal, so
+  `--other fixture-catalog` stood. No time was taken: this leg reads scores and plans only. The Python
+  backend was not run.
+- **The command.** It is leg (vii)'s TypeScript command, with `--docs-root expause_web/docs` and seven
+  `--conventions`. Those are the seven documents the catalog's own `harness.config.json` names:
+  `.claude/context/data-layer.md`, `domain.md`, `presentation.md`, `tests.md`, `flutter.md`, `backend.md`
+  and `conventions.md`. The captures went to
+  `harness-runs/scratch/fix-bm25/route-2-typescript-gate10-catalog-1.txt` and `…-2.txt`.
+- **The two runs compared.** Their stdout differs only in line 1, the `ran` timestamp: a `diff` of the two
+  with line 1 dropped exits 0. So do the two captures: a `cmp` of the two with line 1 dropped exits 0.
+  Every figure below is therefore both runs' figure.
+- **The host.** `uname -sr` `Darwin 24.6.0`, Node `v22.23.2`.
+- **The engine.** `server: PostgreSQL 18.6 (PGlite 0.5.10) on wasm32-unknown-emscripten`,
+  `pg_textsearch: 1.5.1`, `bm25_spill_index: available`.
+- **The end state.** `end state: route-2, REINDEX INDEX chunks_bm25 issued after every scenario's last
+  refresh; each rule line is the candidate rule's decision, not issued`.
+- **The corpora.** Corpus A is `gate10-catalog` at catalog commit `dce0de74e` with a clean tree: `{ files:
+  105, chunks: 1454 }`, and `{ files: 104, chunks: 1442 }` without `F`. `F` is
+  `expause_web/docs/roadmap/stripe-web-payments.md`. Corpus B is `fixture-catalog` at `{ files: 9, chunks:
+  41 }`. There are 69 queries, from `evals/docs-retrieval/queries/gate10-catalog.jsonl`. The final corpus
+  holds 37281 hits, and 36878 without `F`.
+- **The plans.** The probe plan was the `chunks_bm25` index scan in every reading, so no reading was
+  re-scored.
+- **The columns** are those of `#### Route 2 at refresh level, issued by hand`.
+
+**TypeScript (PGlite), A `gate10-catalog` at `{ files: 105, chunks: 1454 }`, B `fixture-catalog`.** Run
+twice, with identical output.
+
+| Scenario | Last refresh | Candidate decision | Statement issued | `before` ≠ ref | `after` ≠ ref | Largest `after` difference | Store plan, before → after |
+|---|---|---|---|---|---|---|---|
+| `fresh` | embedded 1454, unchanged 0, deleted 0 | `spill` (0, 1454, 0) | `REINDEX` | 5 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `other-corpus` | embedded 1454, unchanged 0, deleted 41 | `reindex` (41, 1454, 0) | `REINDEX` | 37280 / 37280 | **1 / 0** | `scan`, `q-g10-neg-login-sms-2fa` → `expause_web/docs/INDEX.md#users--social-1`: reference −12.909946, after −12.909947 | Index scan → Index scan |
+| `file-added` | embedded 12, unchanged 1442, deleted 0 | `spill` (0, 12, 0) | `REINDEX` | 7 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `file-edited` | embedded 1, unchanged 1453, deleted 0 | `reindex` (0, 1, 1) | `REINDEX` | 37276 / 37276 | 0 / 0 | — | Index scan → Index scan |
+| `file-removed` | embedded 0, unchanged 1442, deleted 12 | `reindex` (12, 0, 0) | `REINDEX` | 36877 / 36877 | 0 / 0 | — | Index scan → Index scan |
+| `unchanged` | embedded 0, unchanged 1454, deleted 0 | `none` (0, 0, 0) | `REINDEX` | 5 / 0 | 0 / 0 | — | Index scan → Index scan |
+
+**The verdicts**, against `reference-reindex`:
+
+- **TypeScript, `gate10-catalog`: route 2 holds in five of the six scenarios**, at 0 hits in `scan` and in
+  `operator` after `REINDEX`.
+- **In `other-corpus` it does not hold value for value.** The `after` reading differs on 1 hit in `scan`
+  and on none in `operator`. The probe printed that hit's values rounded to six places: −12.909946 in the
+  reference, −12.909947 after. `versus reference-spill.full` names the same hit, also at 1 / 0. Beside it,
+  the probe's own count lines differ by one: `other-corpus.after` read `scan != operator 5597, of which the
+  operator stored as a real 950`, and `reference-reindex.full` read `5598` and `951`. Both summaries read
+  the same: `total_docs 1454, total_len 214271, memtable docs 0, segments 1 segments, 209 pages (1.6MB),
+  19409 terms, 1454 docs`. The hit recurred exactly in the second run, so it is deterministic across these
+  two runs. It is recorded and not attributed, and by the maintainer's ruling it does not hold the fix.
+- **Python: not run.**
+
+Every `after` reading leaves 1 segment and no memtable document, as `reference-reindex` does: 1454
+documents, and 1442 in `file-removed`. The `before` readings hold 2 segments in `fresh`, `file-removed`
+and `unchanged`. They hold 3 in `other-corpus` (`total_docs 1495`) and in `file-added`. `file-edited`
+holds 2 segments beside 1 memtable document (`total_docs 1455`).
+
+**The `unchanged` scenario, read as an index the shipped code left.** Its `before` reading, taken after a
+reopen, holds 0 memtable documents beside 2 segments. It reads 5 / 0 before, and 0 / 0 after `REINDEX` on
+1 segment.
+
+**The store's `LIMIT 50` plan** was the `chunks_bm25` index scan in every reading, `before` and `after`,
+in all six scenarios. That includes all six reference readings. The crossover is 63 rows (`#### The
+lexical-plan crossover, on 1.5.1`). This corpus holds 1454 chunks, and 1442 without `F`.
+
+**Against the built-in corpora.** By the stamp rule, this compares structurally with `#### Route 2 at
+refresh level, issued by hand`, TypeScript rows only:
+
+- **The verdict differs in one scenario.** On `fixture-catalog` and `self-docs` every `after` cell read
+  0 / 0. Here `other-corpus` reads 1 / 0. The other five scenarios match: 0 / 0 after.
+- **The store plan matches `self-docs`, not `fixture-catalog`.** Here it is the index scan everywhere, as
+  on `self-docs` (829 chunks). On `fixture-catalog` (41 chunks), `REINDEX` turned it to `Seq Scan` in five
+  scenarios. Both this corpus and `self-docs` are above the 63-row crossover.
+- **The `before` readings.** They are 0 / 0 in `operator` wherever the built-in corpora's are, and they
+  differ in `scan`. `fresh` and `unchanged` read 5 / 0 here, against 0 / 0 on both built-in corpora.
+  `file-added` reads 7 / 0, against 9 / 0 and 1 / 0. In the three scenarios where the candidate rule
+  decides `reindex`, the `before` reading differs on nearly every hit in both columns: 37280 and 37276 of
+  37281, and 36877 of 36878. On the built-in corpora those three differ on every hit, or on all but two.
+
+#### The relevance eval's deterministic figures, after the fix
+
+**The outcome.** On `fixture-catalog`, 9 of the 36 figures moved against the fresh run of `#### The
+relevance eval's deterministic figures, before the fix`, all down: 5 in arm B and 4 in arm D. They are the
+9 figures that part's Seq Scan run moved, at the same values unrounded. Arm B's MRR reads `0.602` and arm
+D's `0.704`, and recall@1 fell in both arms through the `q-fc-token-lifetime` near-tie pair, as the task
+prompt's lead expected. Arm B's strict recall@3 and strict MRR moved further through a second swap, in
+`q-fc-unreadable-label`. Against that part's Seq Scan run, unfiltered, all 36 figures are equal. The
+filter's only effect is on `q-fc-negative-lattice`: arm B returns no row where the unfiltered plan
+returned five score-`0` rows, and arm D's refs return to the fresh run's. On `self-docs`, read from the same `d15e5cc3` snapshot, none of the 36
+figures moved. Arm B's refs are equal on all 20 queries; arms C, D and E reorder refs on 2, 4 and 7
+queries. Over that run, the vector statement's plan moved from `Index Scan using chunks_hnsw` to `Seq Scan
+on chunks`. After a refresh with deletes, arm C returns 5 refs on all 12 queries on the shipped code, each
+equal to the fresh run's. Every `evals/docs-retrieval/floor.json` row holds. B `mrr` and D `mrr` hold at the
+values Task 8's commit re-recorded.
+
+**The setup.**
+
+- **The code.** 2026-10-21, at commit `0c4630e5` with a clean tree, after `npm run build`. That commit
+  makes `refreshIndex` call `DocStore.rebuildIndexes()`, which issues `END_STATE_STATEMENTS`, `REINDEX
+  INDEX chunks_bm25` alone (`cli/src/retrieval/store.ts`). The TypeScript model cache under
+  `~/.cache/autonomous-sdlc-harness/retrieval/models` held both models.
+- **The engine.** `harness-runs/scratch/fix-bm25/versions.mjs` opened an in-memory PGlite with both
+  extensions before the runs. It read `version()` `PostgreSQL 18.6 (PGlite 0.5.10) on
+  wasm32-unknown-emscripten`, `SHOW pg_textsearch.library_version` `1.5.1`, and `pg_extension.extversion`
+  `pg_textsearch` `1.5.1` and `vector` `0.8.7`.
+- **The `self-docs` snapshot.** `harness-runs/scratch/fix-bm25/base-corpus.mjs` wrote the 76 files of
+  `d15e5cc3` again, as the before-fix part describes. It was removed once the two runs that read it had
+  finished, and `test ! -e harness-runs/scratch/fix-bm25/base-corpus` exited `0`.
+- **The runs**, each through the launcher `harness-runs/scratch/eval.mjs`, on the TypeScript backend, with
+  `--repeat 1`. Each `--out` file was a scratch file holding only the two generated-region markers, so this
+  document's generated region and `evals/docs-retrieval/floor.json` are untouched. All ran before this part
+  was written.
+
+  ```
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --data-dir harness-runs/scratch/fix-bm25/after-fixture-catalog --out harness-runs/scratch/fix-bm25/after-fixture-catalog.md --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --repo harness-runs/scratch/fix-bm25/base-corpus --corpus self-docs --out ../after-self-docs.md --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --repo harness-runs/scratch/fix-bm25/base-corpus --corpus self-docs --data-dir ../after-self-docs-plan --arms C --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus self-docs --data-dir harness-runs/scratch/fix-bm25/after-held --repeat 1
+  bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --data-dir harness-runs/scratch/fix-bm25/after-held --out harness-runs/scratch/fix-bm25/after-held.md --repeat 1
+  ```
+
+  The first went into a data directory that did not exist yet. The `self-docs` run of record was held in
+  memory. The third command, arm C only and with no `--out`, persisted the same snapshot so that its plans
+  could be read; its arm C figures equal the in-memory run's. The last two build the held-another state as
+  `#### The vector arm after a refresh with deletes, before the fix` built it, with the live `self-docs`
+  supplying the dead rows. No statement was issued by hand on any directory.
+- **The provenance**, as every block reads: host `darwin 24.6.0`, Node `v22.23.2`, embedder
+  `Xenova/bge-small-en-v1.5:q8:cls:384:v1`, reranker `Xenova/ms-marco-MiniLM-L-6-v2:q8:sigmoid:v1`,
+  abstention threshold `0.32`, `k` 5, `--repeat 1`. The stub was unset.
+- **The stamps.** `fixture-catalog` at `{ files: 9, chunks: 41 }`, 9 positive and 3 negative queries
+  (`generatedAt` `2026-10-21T19:01:48.417Z`; held-another `2026-10-21T19:06:55.573Z`). `self-docs` at
+  `{ files: 71, chunks: 829 }` from `d15e5cc3`, 15 positive and 5 negative (`generatedAt`
+  `2026-10-21T19:02:59.646Z`). Both equal the before-fix part's stamps, so each comparison below is a
+  before/after pair. The held-another state's live `self-docs` read `{ files: 71, chunks: 830 }`.
+- **The comparisons** were read by `harness-runs/scratch/fix-bm25/extract.mjs` and `vector-compare.mjs`
+  from the JSON blocks of each pair of `--out` files: `before-fixture-catalog.md` and
+  `after-fixture-catalog.md`, `before-self-docs.md` and `after-self-docs.md`, and
+  `before-fixture-catalog-seqscan.md` and `after-fixture-catalog.md`. Every metric was compared unrounded.
+
+**The plans**, each read by `harness-runs/scratch/fix-bm25/after-readings.mjs` through `openPgliteEngine`.
+It reads `EXPLAIN (VERBOSE, COSTS OFF)` of `LEXICAL_SEARCH_STATEMENT`, imported from
+`cli/dist/retrieval/store.js` and bound to `fixture-catalog`'s first query and `ARM_CANDIDATES` (50). It
+also reads the vector statement's `EXPLAIN (COSTS OFF)` with a constant vector, as the before-fix vector
+part read it, plus `pg_class`, the `index_state` meta row and `summarize`:
+
+- **`fixture-catalog`, after the fresh run:** `->  Seq Scan on public.chunks`, under a `Sort` whose key is
+  the operator expression. `index_state` read `rebuilt`. The summary read `total_docs: 41`, memtable
+  `documents: 0`, `Total: 1 segments, 5 pages (0.0MB), 649 terms, 41 docs`, on-disk 57344 bytes, as the
+  before-fix part's reading after `REINDEX` did. The vector statement read `Seq Scan on chunks` under a
+  `Sort`.
+- **`self-docs`, after the plan-only run:** `->  Index Scan using chunks_bm25 on public.chunks`.
+  `index_state` read `rebuilt`, and `chunks`' relpages / reltuples read 177 / 829. The vector statement read
+  `Seq Scan on chunks` under a `Sort`. The before-fix part's plan-only directory,
+  `harness-runs/scratch/fix-bm25/before-self-docs-plan`, read by the same program, gave `Index Scan using
+  chunks_hnsw on chunks` for the vector statement. Its `chunks` read 0 / -1, and it had no `index_state`
+  row.
+- **Held-another, after the `fixture-catalog` run:** count 41, `chunks` 185 / 41, `chunks_bm25` 57344
+  bytes, `chunks_hnsw` 1794048 bytes, summary `total_docs: 41`, one segment of 41 docs, `index_state`
+  `rebuilt`. The vector statement read `Seq Scan on chunks`, under a `Sort`. The lexical statement read
+  `Index Scan using chunks_bm25`. Every value equals the `held-1` row after `REINDEX INDEX chunks_bm25` in
+  the before-fix vector part's readings table.
+
+**`fixture-catalog`, fresh, before → after.** Each cell reads before → after; a figure in bold moved.
+
+| Arm | recall@1 | recall@3 | recall@5 | MRR | strict recall@1 | strict recall@3 | strict recall@5 | strict MRR | abstained, of 3 negatives |
+|---|---|---|---|---|---|---|---|---|---|
+| B `lexical` | **0.444 → 0.333** | 0.889 → 0.889 | 1.000 → 1.000 | **0.657 → 0.602** | **0.444 → 0.333** | **0.778 → 0.667** | 1.000 → 1.000 | **0.606 → 0.541** | 0 → 0 |
+| C `vector` | 0.778 → 0.778 | 1.000 → 1.000 | 1.000 → 1.000 | 0.889 → 0.889 | 0.667 → 0.667 | 0.889 → 0.889 | 1.000 → 1.000 | 0.806 → 0.806 | 0 → 0 |
+| D `fused` | **0.556 → 0.444** | 1.000 → 1.000 | 1.000 → 1.000 | **0.759 → 0.704** | **0.444 → 0.333** | 1.000 → 1.000 | 1.000 → 1.000 | **0.685 → 0.630** | 0 → 0 |
+| E `fused-rerank` | 0.444 → 0.444 | 0.667 → 0.667 | 0.667 → 0.667 | 0.556 → 0.556 | 0.444 → 0.444 | 0.667 → 0.667 | 0.667 → 0.667 | 0.556 → 0.556 | 3 → 3 |
+
+Each moved figure, unrounded, with the refs behind it:
+
+| Arm | Figure | Before | After | Behind it |
+|---|---|---|---|---|
+| B | recall@1 | 0.4444444444444444 | 0.3333333333333333 | `q-fc-token-lifetime`, rank 1 → 2 |
+| B | MRR | 0.6574074074074074 | 0.6018518518518519 | `q-fc-token-lifetime`, rank 1 → 2 |
+| B | strict recall@1 | 0.4444444444444444 | 0.3333333333333333 | `q-fc-token-lifetime`, strict rank 1 → 2 |
+| B | strict recall@3 | 0.7777777777777778 | 0.6666666666666666 | `q-fc-unreadable-label`, strict rank 3 → 4 |
+| B | strict MRR | 0.6055555555555556 | 0.5407407407407407 | both of those |
+| D | recall@1 | 0.5555555555555556 | 0.4444444444444444 | `q-fc-token-lifetime`, rank 1 → 2 |
+| D | MRR | 0.7592592592592592 | 0.7037037037037037 | `q-fc-token-lifetime`, rank 1 → 2 |
+| D | strict recall@1 | 0.4444444444444444 | 0.3333333333333333 | `q-fc-token-lifetime`, strict rank 1 → 2 |
+| D | strict MRR | 0.6851851851851851 | 0.6296296296296295 | `q-fc-token-lifetime`, strict rank 1 → 2 |
+
+Every query whose ordered refs differ, of the 12 in each of arms B to E:
+
+| Arm | Query | Before refs | After refs | Rank, strict rank |
+|---|---|---|---|---|
+| B | `q-fc-unreadable-label` | `docs/labels.md`, `docs/INDEX.md`, `docs/labels.md#when-a-label-is-rejected`, `docs/depot-operations.md#inbound-scanning`, `docs/labels.md#the-routing-barcode` | `docs/labels.md`, `docs/INDEX.md`, `docs/depot-operations.md#inbound-scanning`, `docs/labels.md#when-a-label-is-rejected`, `docs/labels.md#the-routing-barcode` | 3, 3 → 3, 4 |
+| B | `q-fc-token-lifetime` | `docs/api-auth.md#token-exchange`, `#rotating-a-key`, `#scopes`, `#api-keys`, `docs/rates.md#volumetric-weight` | `docs/api-auth.md#rotating-a-key`, `#token-exchange`, `#scopes`, `#api-keys`, `docs/rates.md#volumetric-weight` | 1, 1 → 2, 2 |
+| D | `q-fc-token-lifetime` | `docs/api-auth.md#token-exchange`, `#rotating-a-key`, `#api-keys`, `#scopes`, `docs/webhooks.md#replaying-missed-events` | `docs/api-auth.md#rotating-a-key`, `#token-exchange`, `#api-keys`, `#scopes`, `docs/webhooks.md#replaying-missed-events` | 1, 1 → 2, 2 |
+| D | `q-fc-negative-recruitment` (negative) | `docs/exceptions.md#redelivery-attempts`, `docs/webhooks.md#signature-verification`, `docs/webhooks.md#delivery-and-retries`, `docs/tracking.md#estimated-delivery-window`, `docs/exceptions.md#claims-for-a-lost-parcel` | `docs/exceptions.md#redelivery-attempts`, `docs/webhooks.md#signature-verification`, `docs/tracking.md#estimated-delivery-window`, `docs/webhooks.md#delivery-and-retries`, `docs/exceptions.md#claims-for-a-lost-parcel` | — |
+
+A `#…` entry continues the path of the entry before it. No query's refs differ in arm C or arm E.
+`q-fc-negative-lattice` returned no row in arm B, before and after, and its arm D refs are unchanged.
+
+**Against the task prompt's lead.** The lead expected arm B's MRR to move toward `0.602`, arm D's toward
+`0.704`, and recall@1 to fall by the `q-fc-token-lifetime` near-tie pair. All three happened, at those values:
+`#rotating-a-key` now ranks above `#token-exchange` in arms B and D. The lead did not name four of the
+other moves: arm B's strict recall@1, and arm D's strict recall@1 and strict MRR, which come from the same
+pair, and arm B's strict recall@3, which comes from `q-fc-unreadable-label`'s
+`#inbound-scanning` / `#when-a-label-is-rejected` swap. Arm B's strict MRR comes from both.
+
+**`fixture-catalog` after the fix, against the before-fix Seq Scan run, unfiltered.** All 36 figures are
+equal unrounded, so the filter moves no figure on this plan. The refs differ on one query in each of two
+arms, of the 12 in each of arms B to E:
+
+| Arm | Query | Seq Scan, unfiltered | After the fix |
+|---|---|---|---|
+| B | `q-fc-negative-lattice` (negative) | `docs/INDEX.md`, `docs/api-auth.md`, `docs/api-auth.md#api-keys`, `#token-exchange`, `#scopes` | none |
+| D | `q-fc-negative-lattice` (negative) | `docs/api-auth.md#scopes`, `docs/depot-operations.md#bay-numbering`, `docs/api-auth.md#rotating-a-key`, `docs/INDEX.md`, `docs/labels.md#label-anatomy` | `docs/labels.md#label-anatomy`, `docs/labels.md#printing-and-label-stock`, `docs/webhooks.md#delivery-and-retries`, `docs/depot-operations.md#bay-numbering`, `docs/rates.md#rate-cards`, as the before-fix fresh run |
+
+The five unfiltered rows are the score-`0` rows the before-fix part recorded. Neither move changes a
+figure: the query is a negative, and arms B and D abstained on no negative in either run.
+
+**`self-docs`, from the `d15e5cc3` snapshot, at `{ files: 71, chunks: 829 }`, before → after.** No figure
+moved: all 36 are equal unrounded.
+
+| Arm | recall@1 | recall@3 | recall@5 | MRR | strict recall@1 | strict recall@3 | strict recall@5 | strict MRR | abstained, of 5 negatives |
+|---|---|---|---|---|---|---|---|---|---|
+| B `lexical` | 0.400 → 0.400 | 0.533 → 0.533 | 0.667 → 0.667 | 0.497 → 0.497 | 0.200 → 0.200 | 0.333 → 0.333 | 0.467 → 0.467 | 0.286 → 0.286 | 0 → 0 |
+| C `vector` | 0.533 → 0.533 | 0.533 → 0.533 | 0.533 → 0.533 | 0.533 → 0.533 | 0.200 → 0.200 | 0.267 → 0.267 | 0.267 → 0.267 | 0.233 → 0.233 | 0 → 0 |
+| D `fused` | 0.533 → 0.533 | 0.600 → 0.600 | 0.733 → 0.733 | 0.589 → 0.589 | 0.200 → 0.200 | 0.467 → 0.467 | 0.600 → 0.600 | 0.344 → 0.344 | 0 → 0 |
+| E `fused-rerank` | 0.400 → 0.400 | 0.600 → 0.600 | 0.667 → 0.667 | 0.517 → 0.517 | 0.267 → 0.267 | 0.467 → 0.467 | 0.600 → 0.600 | 0.400 → 0.400 | 4 → 4 |
+
+Every query whose ordered refs, rank, strict rank or abstention differ, of the 20 in each arm. None
+moves a figure: every positive's rank and strict rank are unchanged, and no negative's abstention
+changed. Arm B differs on none.
+
+| Arm | Query | Before | After |
+|---|---|---|---|
+| C | `q-sd-negative-blog` (negative) | `docs/work-report-research/docs-writer.md#draft-work-report-template`, `#read-tree`, `docs/work-report-research/task-plan-writer.md#draft-work-report-template`, `docs/work-report-research/conventions-writer.md#draft-work-report-template`, `docs/work-report-research/reviews/task-plan-writer.md#nice-to-have` | `docs/development.md#7-releasing`, `docs/github-integration-research.md#a2-github-marketplace-can-a-reusable-workflow-be-listed-or-only-an-action`, `docs/work-report-research/docs-writer.md#draft-work-report-template`, `docs/github-integration-research.md#c1-pull_request_review-submitted-pull_request_review_comment-and-issue_comment-on-a-pr-which-review-states-exist-in-the-payload-and-how-to-fetch-every-inline-comment-of-one-review-with-its-file-and-line`, `docs/work-report-research/docs-writer.md#read-tree` |
+| C | `q-sd-negative-migration` (negative) | positions 4–5: `docs/cli.md#3-the-re-run-contract`, `docs/work-report-research/conventions-writer.md#storage-and-lifecycle` | positions 4–5: `docs/retrieval.md#what-this-buys-you`, `docs/cli.md#3-the-re-run-contract` |
+| D | `q-sd-stack-detection` | positions 4–5: `docs/cli.md#generator-order-and-why-it-is-load-bearing`, `docs/config.md#1-the-three-resolution-classes` | swapped; rank 1, strict rank 2 both |
+| D | `q-sd-negative-tungsten` (negative) | `docs/work-report-research/layer-reviewer.md#read-tree`, `docs/retrieval-eval-results.md#the-re-calibration-method-fixed-before-the-real-catalog-run`, `docs/work-report-research/_review_brief.md#check-in-this-order`, `docs/retrieval-eval-results.md#the-deciding-figures-on-pg_textsearch-151`, `docs/work-report-research/conventions-reviewer.md#review-response` | `docs/retrieval-eval-results.md#the-observed-distributions-quoted`, `#abstention-query-by-query`, `#threshold-calibration`, `docs/work-report-research/layer-reviewer.md#read-tree`, `docs/retrieval-eval-results.md#the-re-calibration-method-fixed-before-the-real-catalog-run` |
+| D | `q-sd-negative-blog` (negative) | `docs/retrieval-eval-results.md#the-re-calibration-method-fixed-before-the-real-catalog-run`, `docs/work-report-research/docs-writer.md#draft-work-report-template`, `docs/cli.md#generator-order-and-why-it-is-load-bearing`, `docs/work-report-research/docs-writer.md#read-tree`, `docs/development.md#6-the-roadmap-this-tree-defers-to` | `docs/development.md#7-releasing`, `docs/github-integration-research.md#a2-github-marketplace-can-a-reusable-workflow-be-listed-or-only-an-action`, `docs/github-integration-research.md#c1-pull_request_review-submitted-…`, `docs/github-run-control.md#5-lifecycle-comments-and-state-labels`, `#verified-in-gate-12-round-6` |
+| D | `q-sd-negative-migration` (negative) | `docs/watcher.md#migration-both-layouts-until-no-worktree-run-is-left`, `docs/retrieval-eval-results.md#the-re-calibration-method-fixed-before-the-real-catalog-run`, `docs/second-runtime-port-decision.md#3-a-checkpointer-would-be-a-second-source-of-truth`, `docs/watcher.md#where-the-family-runs-git-in-a-runs-copy-and-under-what-pins`, `docs/work-report-research/reviews/branch-reviewer.md#must-fix` | `docs/retrieval.md#what-this-buys-you`, `docs/watcher.md#migration-both-layouts-until-no-worktree-run-is-left`, `docs/retrieval.md#turning-on-the-python-backend`, `docs/retrieval-eval-results.md#the-re-calibration-method-fixed-before-the-real-catalog-run`, `docs/second-runtime-port-decision.md#3-a-checkpointer-would-be-a-second-source-of-truth` |
+| E | `q-sd-state-dir` | positions 4–5: `.claude/context/conventions.md#configuration-is-the-source-of-truth-and-it-is-read-at-run-time`, `docs/config.md#1-the-three-resolution-classes` | positions 4–5: `docs/config.md#1-the-three-resolution-classes`, `docs/development.md#2-the-one-authoring-rule-that-follows` |
+| E | `q-sd-cross-asset-reference` | position 5: `.claude/context/plugin.md#not-determined` | position 5: `docs/development.md#4-userconfig-reserved` |
+| E | `q-sd-search-abstains` | positions 4–5: `docs/cli.md#11-docs`, `docs/retrieval.md#when-to-turn-it-on` | positions 4–5: `docs/retrieval.md#turning-on-the-python-backend`, `docs/cli.md#11-docs` |
+| E | `q-sd-retrieval-network` | positions 3–5: `docs/retrieval.md#when-to-turn-it-on`, `docs/retrieval-eval-results.md#the-limits-stated-with-the-verdict`, `#the-candidate-end-state-rule-at-refresh-level` | positions 3–5: `docs/retrieval.md#how-it-fits-together`, `docs/retrieval-eval.md#the-decision-rule`, `docs/retrieval.md#when-to-turn-it-on` |
+| E | `q-sd-analyze-writes` | abstained, no refs | not abstained: `docs/work-report-research/conventions-writer.md#verdict`, `docs/analyze.md`, `#9-how-the-offer-reaches-the-command-and-the-naming-hazard`, `#10-what-the-skeletons-say-now-the-offer-exists`, `docs/work-report-research/README.md#pre-existing-bugs-found-along-the-way-confirmed-by-a-reviewer`; rank 0 both |
+| E | `q-sd-stack-detection` | positions 4–5: `.claude/context/cli.md#how-a-module-in-this-layer-is-written`, `docs/cli.md` | positions 4–5: `docs/cli.md`, `docs/retrieval.md#turning-on-the-python-backend` |
+| E | `q-sd-negative-grpc` (negative) | positions 3–5: `docs/retrieval-eval.md#the-bm25-index-state-probe`, `docs/retrieval-eval-results.md#cold-start`, `docs/retrieval.md#when-to-turn-it-on` | positions 3–5: `docs/cli.md#11-docs`, `docs/retrieval-eval.md#the-bm25-index-state-probe`, `docs/retrieval-eval-results.md#cold-start` |
+
+`#c1-pull_request_review-submitted-…` is the same ref as in the arm C row above it, cut. The arm C row for
+`q-sd-negative-migration` keeps its first three refs; so do the E rows that name only later positions.
+
+**Why `self-docs`' arm C moved, as far as the readings go.** Arm B is unchanged, on `Index Scan using
+chunks_bm25` before and after. The vector statement's plan is not: `Index Scan using chunks_hnsw` on the
+before-fix directory, at `chunks` reltuples -1, and `Seq Scan on chunks` under a `Sort` on the after-fix
+one, at 829. The before-fix vector part read the same move on `fixture-catalog` after `REINDEX INDEX
+chunks_bm25`, reltuples -1 → 41. A `Seq Scan` under a `Sort` orders every row exactly, where the HNSW scan
+is approximate. The two arm C reorderings are consistent with that. Arms D and E fuse arm C's list, and E
+reranks the fused list, which is consistent with their reorderings. Neither the eval's own query
+embeddings nor a forced plan was read on this directory, so this is recorded, not attributed. The
+in-memory run of record could not be read, so the plan readings come from the arm-C-only persisted run.
+
+**The vector arm on the shipped end state.** In the held-another state built on the fixed code, arm C
+returned 5 refs on every one of the 12 queries. Each query's ordered refs, rank, strict rank and abstention
+equal the before-fix fresh `fixture-catalog` run. They also equal the before-fix vector part's `REINDEX
+INDEX chunks_bm25` row (`held-1-b.md`) on all 12 queries in arms B to E. The figures equal it too, and that
+row is the shipped end state, since **The decision.** there adopts no vector statement. The diagnosis's two
+short lists, 3 refs for `q-fc-verify-callback` and 0 for `q-fc-negative-lattice`, do not recur on the
+shipped code: 5 and 5. As that part found, the full lists come from the plan: the vector statement reads
+`Seq Scan on chunks` here too. So what that part left open is still open on the shipped code: arm C's lists
+after deletes on a corpus whose vector statement stays on `Index Scan using chunks_hnsw`. Arms B, D and E
+in this state equal the fresh after-fix `fixture-catalog` run on all 36 figures and every query's refs.
+
+**The floor, by reading.** Each `evals/docs-retrieval/floor.json` row against this part's fresh
+`fixture-catalog` run. A breach is a figure below its row's `value`. None is breached, and every `value`
+sits below its figure.
+
+| Arm | Metric | `value` | `recordedAt` | This run |
+|---|---|---|---|---|
+| B | recall@5 | 0.95 | 2026-09-21 | 1.000 |
+| B | MRR | 0.55 | 2026-10-21 | 0.6018518518518519 |
+| C | recall@5 | 0.95 | 2026-09-21 | 1.000 |
+| C | MRR | 0.83 | 2026-09-21 | 0.8888888888888888 |
+| D | recall@5 | 0.95 | 2026-09-21 | 1.000 |
+| D | MRR | 0.65 | 2026-10-21 | 0.7037037037037037 |
+| E | recall@5 | 0.61 | 2026-09-21 | 0.667 |
+| E | MRR | 0.5 | 2026-09-21 | 0.5555555555555556 |
+
+Two rows were re-recorded with Task 8's change, commit `0c4630e5`, the only commit touching `floor.json`
+since `d15e5cc3` (`git log d15e5cc3..HEAD -- evals/docs-retrieval/floor.json`). Its reason line reads:
+*"Re-record fixture-catalog floors: route 2's REINDEX end state puts the 41-chunk corpus on the filtered
+Seq Scan plan, moving B/mrr, D/mrr (docs/retrieval-eval.md → The regression floor)"*. The arithmetic, by
+`docs/retrieval-eval.md` → `## The regression floor` → **The margin, and why there is one.**:
+
+- B `mrr`: 0.6018518518518519 − 0.05 = 0.5518…, truncated to 0.55, was 0.6;
+- D `mrr`: 0.7037037037037037 − 0.05 = 0.6537…, truncated to 0.65, was 0.7.
+
+This run's figures equal the ones those values were taken from. No other row moved, so none was
+re-recorded. `evals/docs-retrieval/check-floor.mjs` was not run; gate 11 grades it at the Run gates phase.
+
+#### The shipped end state at refresh level
+
+**The outcome.** The shipped refresh's end state matches `reference-reindex` in 11 of the 12 TypeScript
+scenarios, at 0 hits in `scan` and in `operator`, `unchanged` included. The exception is `self-docs`
+`file-edited`, whose `before` reading differs on 1 hit in `scan` and 0 in `operator`. The hand-issued
+`REINDEX` that follows leaves the same hit. The maintainer ruled that this hit is recorded and not
+attributed, and that it is not a defect in Task 8's commit, as for Task 6's real-catalog residual in
+`#### Route 2 on the real catalog`. On both corpora the fix moved `other-corpus`, `file-added` and `file-removed` from
+differing to matching. On `fixture-catalog` it also moved `file-edited`. On `self-docs` it took
+`file-edited` from 9636 / 9636 to 1 / 0.
+
+**The setup.**
+
+- **The code.** 2026-10-21, at commit `300b1e04`, after `npm run build`. The tree held this task's two
+  probe edits, neither of which changes a statement the refresh-rule module issues or a reading it takes:
+  `evals/docs-retrieval/bm25-history.mjs` → `STORE_SELECT` is now the store's exported
+  `LEXICAL_SEARCH_STATEMENT`, and `evals/docs-retrieval/bm25-refresh-rule.mjs`'s header is restated. On
+  this commit `refreshIndex` calls `DocStore.rebuildIndexes()`, which issues `END_STATE_STATEMENTS`
+  (`REINDEX INDEX chunks_bm25` alone), after every refresh that wrote anything and after any refresh whose
+  index is not marked rebuilt (`cli/src/retrieval/store.ts`, `cli/src/retrieval/refresh.ts`).
+- **The engine.** `harness-runs/scratch/fix-bm25/versions.mjs`, run before the first run, read `version()`
+  `PostgreSQL 18.6 (PGlite 0.5.10) on wasm32-unknown-emscripten`, `SHOW pg_textsearch.library_version`
+  `1.5.1`, and `pg_extension.extversion` `pg_textsearch` `1.5.1` and `vector` `0.8.7`.
+- **The runs.** These are the two TypeScript refresh-level commands of `docs/retrieval-eval.md` → `### The
+  BM25 index-state probe`, unchanged, at the default `--end-state candidate`, with `--capture` into
+  `harness-runs/scratch/fix-bm25/shipped-typescript-<corpus>-1.txt`. Each was run once, and both exited
+  `0`. The `self-docs` run outlasted the session's 600 s foreground limit and finished in the background.
+  Its capture was read once it had exited, and the maintainer accepted that collection. Both summaries read `pg_textsearch: 1.5.1`. The Python
+  backend's refresh is unchanged on this branch, so it was not run. Its figures in `#### Route 2 at refresh
+  level, issued by hand` and `#### The candidate end-state rule, at refresh level, on 1.5.1` stand.
+- **The corpora.** `fixture-catalog` is at `{ files: 9, chunks: 41 }`, and at `{ files: 8, chunks: 36 }`
+  without `F` (`docs/webhooks.md`). `self-docs` is at `{ files: 71, chunks: 830 }`, and at `{ files: 70,
+  chunks: 819 }` without `F` (`docs/work-report-research/user-review-fix-plan-writer.md`). Task 2's runs
+  read `829` and `818`. This branch has edited `docs/`, so every `self-docs` count is compared
+  structurally. The final corpus holds 219 hits on `fixture-catalog` and 198 without `F`, and 9656 and 9564
+  on `self-docs`.
+- **The plans.** The probe plan was the `chunks_bm25` index scan in all 18 readings of each run, so no
+  reading was re-scored.
+- **The columns** are those of `#### Route 2 at refresh level, issued by hand`, with one change. **Statement
+  issued** is what the module issued by hand after the shipped refresh, and that refresh had already
+  ended in `REINDEX`.
+
+**TypeScript (PGlite), A `fixture-catalog`, B `self-docs`.**
+
+| Scenario | Last refresh | Candidate decision | Statement issued | `before` ≠ ref | `after` ≠ ref | Largest `after` difference | Store plan, before → after |
+|---|---|---|---|---|---|---|---|
+| `fresh` | embedded 41, unchanged 0, deleted 0 | `spill` (0, 41, 0) | spill | 0 / 0 | 0 / 0 | — | **Seq Scan** → **Seq Scan** |
+| `other-corpus` | embedded 41, unchanged 0, deleted 830 | `reindex` (830, 41, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `file-added` | embedded 5, unchanged 36, deleted 0 | `spill` (0, 5, 0) | spill | 0 / 0 | 0 / 0 | — | **Seq Scan** → **Seq Scan** |
+| `file-edited` | embedded 1, unchanged 40, deleted 0 | `reindex` (0, 1, 1) | `REINDEX` | 0 / 0 | 0 / 0 | — | **Seq Scan** → **Seq Scan** |
+| `file-removed` | embedded 0, unchanged 36, deleted 5 | `reindex` (5, 0, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | **Seq Scan** → **Seq Scan** |
+| `unchanged` | embedded 0, unchanged 41, deleted 0 | `none` (0, 0, 0) | none | 0 / 0 | 0 / 0 | — | **Seq Scan** → **Seq Scan** |
+
+**TypeScript (PGlite), A `self-docs` at `{ files: 71, chunks: 830 }`, B `fixture-catalog`.**
+
+| Scenario | Last refresh | Candidate decision | Statement issued | `before` ≠ ref | `after` ≠ ref | Largest `after` difference | Store plan, before → after |
+|---|---|---|---|---|---|---|---|
+| `fresh` | embedded 830, unchanged 0, deleted 0 | `spill` (0, 830, 0) | spill | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `other-corpus` | embedded 830, unchanged 0, deleted 41 | `reindex` (41, 830, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `file-added` | embedded 11, unchanged 819, deleted 0 | `spill` (0, 11, 0) | spill | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `file-edited` | embedded 1, unchanged 829, deleted 0 | `reindex` (0, 1, 1) | `REINDEX` | **1** / 0 | **1** / 0 | 2.384185791015625e-7, raw (`q-sd-stack-detection`, `docs/guard-verification.md#23-fail-closed-matrix-with-positive-controls`) | Index scan → Index scan |
+| `file-removed` | embedded 0, unchanged 819, deleted 11 | `reindex` (11, 0, 0) | `REINDEX` | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+| `unchanged` | embedded 0, unchanged 830, deleted 0 | `none` (0, 0, 0) | none | 0 / 0 | 0 / 0 | — | Index scan → Index scan |
+
+**The verdict, against `reference-reindex`:**
+
+- **TypeScript, `fixture-catalog`: the shipped end state matches** in all six scenarios, at 0 hits in both
+  columns, `unchanged` included.
+- **TypeScript, `self-docs`: the shipped end state does not match in `file-edited`.** It differs on 1 hit
+  in `scan` and 0 in `operator`. It matches in the other five, `unchanged` included. The run was taken
+  once, so no `--compare` says whether the hit recurs. By the maintainer's ruling the hit is recorded, not
+  attributed, and is not a defect in Task 8's commit.
+
+**The differing hit.** `q-sd-stack-detection` → `docs/guard-verification.md#23-fail-closed-matrix-with-positive-controls`.
+
+- **`scan`:** `file-edited.before` reads `−2.548860`, raw `−2.5488603115081787`, against
+  `reference-reindex.full`'s `−2.548861`, raw `−2.548860549926758`.
+- **`operator`:** `−2.5488604307174683` in both.
+- **Where it shows:** `fresh`, `other-corpus`, `file-added` and `unchanged` all read `reference-reindex`'s
+  raw `scan`. `file-edited.after`, read after the hand-issued `REINDEX`, reads the same
+  `−2.5488603115081787` as `before`.
+- **What was ruled out:** the index summary has the same totals in `before`, `after` and the reference:
+  `total_docs 830`, `total_len 384157`, 1 segment, no memtable document.
+
+So a second `REINDEX` over the same live rows did not reach the reference's value for this hit. That
+`REINDEX` was issued in the same database, whose `chunks` table had one row rewritten by the edit. The
+cause is not attributed here. The difference is 2.384185791015625e-7, one float32 ULP at this
+magnitude. The `operator` reading and the index summary are identical, and a second `REINDEX` leaves the hit.
+The maintainer ruled, as for Task 6's real-catalog residual (`#### Route 2 on the real catalog`), that
+the hit is recorded and not attributed, and that it is not a defect in Task 8's commit.
+
+**The index state left behind.** Every `before` reading leaves 1 segment and no memtable document, read
+after a reopen. That is 41 documents on `fixture-catalog` (36 in `file-removed`), and 830 on `self-docs`
+(819 in `file-removed`).
+
+**The store's `LIMIT 50` plan.** On `fixture-catalog`, the `before` plan is `Seq Scan on public.chunks` in
+five scenarios and the `chunks_bm25` index scan in `other-corpus`. That is the plan Task 2's route-2 run
+read *after* its hand-issued `REINDEX`, scenario for scenario. `other-corpus`'s table held corpus B's 830
+rows before the refresh, and its `REINDEX` leaves the index scan, as in Task 2's run. On `self-docs`
+every reading's store plan is the index scan. Each plan's `Output` lists `id` and the `<@>` operator
+expression, which is `LEXICAL_SEARCH_STATEMENT`'s `score` column.
+
+**Against the two earlier tables.** These are the TypeScript `before` columns of `#### Route 2 at refresh
+level, issued by hand` (Task 2, *route 2*) and `#### The candidate end-state rule, at refresh level, on
+1.5.1` (*candidate*). On `fixture-catalog`, at the same counts, the comparison is value for value. On
+`self-docs` it is structural.
+
+- **Moved from differing to matching:**
+  - **`other-corpus`:** `fixture-catalog` from 219 / 219 in both; `self-docs` from 9636 / 9636 (route 2) and
+    9579 / 9579 (candidate).
+  - **`file-added`:** `fixture-catalog` from 9 / 0 in both; `self-docs` from 1 / 0 in both.
+  - **`file-removed`:** `fixture-catalog` from 198 / 198 in both; `self-docs` from 9544 / 9542 (route 2) and
+    9487 / 9487 (candidate).
+  - **`file-edited` on `fixture-catalog`:** from 219 / 219 in both.
+- **Moved, and still differing:** `file-edited` on `self-docs`, from 9636 / 9636 (route 2) and 9577 /
+  9577 (candidate) to 1 / 0.
+- **Matching before and after the fix:** `fresh` and `unchanged` on `fixture-catalog`, at 0 / 0 in all
+  three.
+- **Shifted with the stamp, not attributed:** `fresh` and `unchanged` on `self-docs` read 0 / 0 in route 2
+  and here, and 2 / 0 in candidate.
+- **The store plan:** on `fixture-catalog`, the `before` plan moved from the index scan to `Seq Scan` in
+  every scenario but `other-corpus`. On `self-docs` it stayed the index scan.
+
 ### The recommendation for the fix branch
 
 **What this is.** A proposal to the maintainer for the route of the branch that fixes the BM25 scores'
@@ -30894,3 +31810,14 @@ recorded. The Seq Scan qualification stands: `REINDEX` still turns the store's p
 the crossover is still 63 rows (`#### The lexical-plan crossover, on 1.5.1`, **The outcome.**). The `none`
 qualification stands on the `unchanged` figures above. Route 2 remains a proposal, and the fix branch
 decides.
+
+**What shipped.** Route 2 shipped on the TypeScript backend, on
+`fix_docs_retrieval_bm25_index_state_typescript`: `refreshIndex` ends every refresh that wrote anything,
+and every refresh whose index is not marked rebuilt, with `DocStore.rebuildIndexes()`, which issues
+`END_STATE_STATEMENTS` — `REINDEX INDEX chunks_bm25` alone (`cli/src/retrieval/store.ts`,
+`cli/src/retrieval/refresh.ts`). An index an earlier version built is detected by the `meta` marker: the
+`index_state` key reads `rebuilt` only once `rebuildIndexes()` has returned over the stored rows, and an
+index without that value is rebuilt by the next refresh. `lexicalSearch` drops every score-`0` row on every
+plan. The figures are in `### Route 2 on the fix branch`, the real-catalog figure in `#### Route 2 on the
+real catalog` and the shipped end state in `#### The shipped end state at refresh level`. The Python
+backend's store is unchanged on this branch.
