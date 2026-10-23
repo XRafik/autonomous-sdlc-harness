@@ -2004,7 +2004,7 @@ hr_progress_comments() {
 # `sandbox.optOut` — 0 when the opt-out is taken (a `reason` that is a string
 # and not blank); 1 otherwise. The caller passes the MAIN checkout, never a run
 # copy, whose `harness.config.json` the sandbox can rewrite. Every non-0 answer,
-# including every `hr_config_load` failure — an absent, unparseable or
+# including every `hr_config_load` failure — an absent, unparsable or
 # multi-document file, or a missing `defaultBranch` — means NOT opted out, so a
 # refusal that rests on it stands.
 hr_sandbox_opted_out() {
@@ -5622,9 +5622,11 @@ hr_lane_mkdir() {
 # A path's modification time as an epoch, or 0. THE FALLBACK IS CHOSEN ON THE
 # VALUE, NOT THE EXIT STATUS: `-f` means `--file-system` to GNU `stat`, which
 # therefore succeeds while printing something that is not a timestamp. The only
-# `stat` in this file, and it exists for one case — a lock directory whose
-# `owner` file is missing or unreadable, where the directory's own mtime is the
-# only acquisition time there is.
+# `stat` in this file. Two kinds of caller depend on the 0-for-missing-or-
+# unreadable answer: a lock directory whose `owner` file is missing or
+# unreadable, where the directory's own mtime is the only acquisition time
+# there is; and `run-test-suite.sh`'s `heartbeat_age`, which reads a run's
+# `<label>.running` heartbeat and treats 0 as "cannot be read", never as a time.
 hr_lane_mtime() {
   local path="${1-}" m=""
   [ -n "$path" ] && [ -e "$path" ] || {
