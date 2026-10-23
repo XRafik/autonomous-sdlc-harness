@@ -27644,8 +27644,10 @@ those situations has been measured — is `docs/retrieval.md` → `## When to tu
 **Who reads this, and what it decides.** A maintainer deciding whether the Python backend
 (`docs-retrieval-service/`) retrieves what the TypeScript one (`cli/src/retrieval/`) retrieves over the
 same corpora and query sets, and whether the two may share an embedder id. The subsections up to
-`### Abstention, query by query` cover relevance. Cost, latency beyond the arm tables, cold start,
-footprint and the agent session follow them.
+`### A fresh fixture-catalog reading, both backends as shipped` cover relevance. That subsection is a
+later, deterministic reading on both backends as shipped; the rest of the section is the 2026-10-08
+reading on `pg_textsearch` 1.3.1. Cost, latency beyond the arm tables, cold start, footprint and the agent
+session follow them.
 
 ### What was compared, and through what
 
@@ -27683,7 +27685,8 @@ footprint and the agent session follow them.
 Every figure is copied from `renderBackendComparison` over the four blocks. The `fixture-catalog` floor is
 `evals/docs-retrieval/floor.json`, recorded 2026-09-21. It is graded `>=`, as gate 11 grades it, and
 shown as `met` or `short` per backend. `self-docs` has no floor. The p50 and p95 latencies are measured at
-different boundaries on the two sides, as `### What was compared, and through what` states.
+different boundaries on the two sides, as `### What was compared, and through what` states. They were
+taken on `pg_textsearch` 1.3.1 on 2026-10-08, before the BM25 fixes, and are left as recorded.
 
 **`fixture-catalog`**
 
@@ -27726,18 +27729,27 @@ as TypeScript → Python, where rank 0 means no relevant hit. Both come from the
 
 **They disagree, and the reason is not yet identified.**
 
-No arm returns the same ordered refs on every query of either corpus, so *within noise* cannot be
-claimed. Two differences are identified, each by a measurement below. The first is arm B's divergence,
-which is the Python index's history in its database (divergence source (3)). The second is the one
-abstention mismatch, which is the reranker scoring one identical pair differently (sources (1) and (2)
-together). Four differences are not identified:
+This is the case for the 2026-10-08 blocks. No arm returns the same ordered refs on every query of
+either corpus in them, so *within noise* cannot be claimed. Three differences are identified, each by a
+measurement below. The first is arm B's divergence, which is the Python index's state: mechanisms 1 and
+2, the latter `timescale/pg_textsearch#573` (divergence source (3)). The second is the one abstention
+mismatch, which is the reranker scoring one identical pair differently (sources (1) and (2) together).
+The third is the two near-tie swaps in arm B that remain on a fresh database, which are mechanism 2,
+`timescale/pg_textsearch#573`, in the Python store's own fresh build (source (3), **The near-tie pairs,
+since explained.**). Three differences are not identified:
 
 - arm C's ref-order changes;
-- how arms D and E split between the index's history and model precision;
-- two near-tie swaps in arm B that remain on a fresh database;
+- how arms D and E split between the index's state and model precision;
 - `q-sd-daemon-lifecycle` dropping out of arm E's top five on the Python side.
 
 Calling the second case would claim more than was measured.
+
+**On the fresh reading.** `### A fresh fixture-catalog reading, both backends as shipped` reads
+`fixture-catalog` again with both backends in the `REINDEX` state, and arm B returns the same ordered
+refs on both sides on every one of its 12 queries. On that reading the backends differ only in arms C to
+E, for which the models, sources (1) and (2), are the measured candidate. Those differences stay
+unexplained, for the reason item 4 of `### Divergence sources, in the order checked` gives for arm C:
+the query vectors and the Python side's HNSW graph were not measured. `self-docs` was not re-read.
 
 ### Divergence sources, in the order checked
 
@@ -27762,9 +27774,16 @@ Calling the second case would claim more than was measured.
      'chunks_bm25')` (`cli/src/retrieval/store.ts` and `docs-retrieval-service/src/harness_docs_retrieval/store.py`
      → `BM25_INDEX_DEFINITION`, `BM25_ORDER_CLAUSE`). `pg_extension.extversion` reads `pg_textsearch`
      1.3.1 on both. The servers are PGlite 0.5.8's PostgreSQL 18.3 and the compose image's
-     PostgreSQL 18.2, and `EXPLAIN` shows both choosing the `chunks_bm25` index scan.
+     PostgreSQL 18.2, and `EXPLAIN` shows both choosing the `chunks_bm25` index scan. These readings
+     were taken on `pg_textsearch` 1.3.1; `chore_docs_retrieval_pg_textsearch_upgrade` has since moved
+     both engines to 1.5.1 (`### The deciding figures on pg_textsearch 1.5.1` → `#### How these were
+     taken, on 1.5.1`).
    - **The probe.** It ran that `ORDER BY` with the score selected, top 8 per query, over
-     `fixture-catalog`'s 12 queries. One side was a freshly built TypeScript index; the TypeScript runner
+     `fixture-catalog`'s 12 queries. The score it selected is the `<@>` operator, not the score the store
+     ranks by: the store ranks by the index scan's own score, `bm25_get_current_score()`, and the two
+     differ while rows sit in the memtable (`### How the probe reads a score, and the setup`, the `scan`
+     and `operator` bullets). Every score this probe recorded, on the compose database and on the empty
+     one alike, is therefore an `operator` score. One side was a freshly built TypeScript index; the TypeScript runner
      builds a fresh in-memory index on every run, as it did for its block. The other side was the Python
      index, built through `indexPythonCorpus`, in two states:
      - **The compose database, after it had held other corpora.** This is the state the Python blocks
@@ -27801,19 +27820,54 @@ Calling the second case would claim more than was measured.
      The probe was a scratch launcher run in a session, as **What was taken in a session.** in
      `### What was compared, and through what` already says. Its scores are not a wall-clock figure: the
      statement returns the same scores whenever it runs against the same database state.
-   - **What it shows.** The recorded arm B divergence comes from the Python database's history: its BM25
-     statistics are not those of the live rows alone. The measured fact is that the scores depend on
-     the history. That the statistics still count rows a refresh deleted is inferred from the refresh's
-     delete-and-insert path, and was not measured.
-   - **What stays unexplained.** On the empty database, two queries order a near-tie pair against the
-     score the operator itself returns, while TypeScript orders both by score. On
+   - **What it shows.** The recorded arm B divergence comes from the Python index's state: its BM25
+     scores are not those of an index built over the live rows alone. The measured fact is that the
+     scores depend on the database's state. Two mechanisms produce that dependence, both defined in
+     `### Whether either mechanism moves relevance`:
+     - **Mechanism 1, dead rows that stay in the index's statistics.** The rows a refresh deletes stay
+       counted in `total_docs` and `total_len`. This bullet first recorded that as an inference that was
+       not measured; it has since been measured. In every `other-corpus` scenario, whose last refresh
+       deleted the other corpus's rows, the before-fix end state, each scenario's `before` reading,
+       differs from a fresh build followed by `REINDEX` on every hit in both columns, on both backends
+       and both corpora (`### The candidate end-state rule, at refresh level`, the `other-corpus` rows).
+     - **Mechanism 2, exact lengths in the memtable against quantized ones in segments.** The index scan
+       scores a memtable row with its exact length and a segment row with a quantized one, so a freshly
+       inserted index ranks its rows by other scores than the same rows in a segment
+       (`### The score each index state ranks by`, the `t0` rows). This is reported upstream as
+       `timescale/pg_textsearch#573`, which the maintainer filed after this diagnosis and which is still
+       open on 1.5.1, cited from the task prompt of `chore_docs_retrieval_backend_comparison_record` and
+       not read on that branch.
+     - **The fresh build is not one state.** The Python store's own fresh build left 116 memtable
+       documents in one run and 276 in another on `self-docs` (`### The candidate end-state rule, at
+       refresh level`, the paragraph after its Python `self-docs` table).
+     - **What shipped.** Both backends now end every refresh that wrote anything, the first build, and
+       any refresh whose index is not marked rebuilt, in `REINDEX INDEX chunks_bm25`
+       (`### The recommendation for the fix branch` → **What shipped.**). Their shipped end states match
+       a fresh build followed by `REINDEX` in 11 of 12 scenarios each (`### Route 2 on the fix branch` →
+       `#### The shipped end state at refresh level`, its TypeScript and Python parts).
+   - **The near-tie pairs, since explained.** On the empty database, two queries order a near-tie pair
+     against the score the operator itself returns, while TypeScript orders both by score. On
      `q-fc-token-lifetime`, `docs/api-auth.md#rotating-a-key` scores −8.307983 and
      `#token-exchange` scores −8.281486. On `q-fc-unreadable-label`,
      `docs/depot-operations.md#inbound-scanning` scores −5.534851 and
-     `docs/labels.md#when-a-label-is-rejected` scores −5.514854.
+     `docs/labels.md#when-a-label-is-rejected` scores −5.514854. Both are mechanism 2,
+     `timescale/pg_textsearch#573`: the store ranks by `scan`, the scores recorded here are `operator`,
+     and the Python store's fresh build on an empty database is the `t0` state that returns both pairs
+     against `operator`'s order (`### The near-tie ordering on an empty database`;
+     `### The recommendation for the fix branch` → **Goal 4's conclusion**). The same inversions recur at
+     `t0` on 1.5.1 (`#### The near-tie ordering, on 1.5.1`). On the fresh reading, arm B returns the same
+     ordered refs on both sides for both queries (`### A fresh fixture-catalog reading, both backends as
+     shipped`).
 4. **Anything else the per-query lists show.**
-   - **Arms D and E** fuse arm B's lexical ranking, so their Python sides carry the database's history
-     as well as (1) and (2). The blocks cannot separate the two, so the split is unexplained.
+   - **Arms D and E** fuse arm B's lexical ranking, so in the 2026-10-08 blocks their Python sides carry
+     arm B's index-state mechanisms, source (3), as well as (1) and (2). Those blocks cannot separate the
+     two, so for them the split stays unexplained. On the fresh reading arm B's top five ordered refs
+     agree on every query, but each backend fuses every arm's top `ARM_CANDIDATES` hits, 50
+     (`cli/src/retrieval/search.ts` and `docs-retrieval-service/src/harness_docs_retrieval/search.py`),
+     and arm B's ranks past five were not compared. On `q-fc-route-choice` arm D differs at rank 5 while
+     arms B and C return the same five refs on both sides, so arms D and E's differences there are not
+     attributed to either arm and stay unexplained (`### A fresh fixture-catalog reading, both backends
+     as shipped`).
    - **Arm C** changes order on 6 `fixture-catalog` queries, none of which moves a positive's rank, and
      on 16 `self-docs` queries, one of which moves a positive's rank (`q-sd-new-subcommand`, 5 → 1).
      Source (1) together with (2) is the measured candidate for those changes, but only for document
@@ -27822,12 +27876,16 @@ Calling the second case would claim more than was measured.
    - **`q-sd-daemon-lifecycle`** drops out of arm E's top five on the Python side, rank 4 → 0. This is
      unexplained for the same reason as the arm D and E split.
 
-**Finding — a defect, recorded and not acted on.** The Python backend's lexical scores depend on what its
-database held before, so the same corpus can rank differently after a re-index. A fresh database removes
-the effect on this corpus. It is named here as work for its own branch, and this branch fixes nothing.
-That branch would decide whether a refresh should rebuild the BM25 index or the eval should index into an
-empty database, and would measure whether the TypeScript backend's persistent index, which is refreshed
-the same way, carries the same dependence. That was not measured here.
+**Finding — a defect, since diagnosed and fixed.** On 2026-10-08 the Python backend's lexical scores
+were found to depend on the database's earlier contents, so the same corpus could rank differently after
+a re-index, and a fresh database removed the effect on this corpus. The dependence was since diagnosed as
+two mechanisms (item 3; `## The BM25 index's state, measured`), mechanism 2 being
+`timescale/pg_textsearch#573`. The question it left open, whether the TypeScript backend's persistent
+index, refreshed the same way, carries the same dependence, was since measured: it does, in the `before`
+readings of `### The candidate end-state rule, at refresh level`'s TypeScript tables. Both backends now
+end every refresh that wrote anything, and the first build, in `REINDEX INDEX chunks_bm25`, on
+`fix_docs_retrieval_bm25_index_state_typescript` and `fix_docs_retrieval_bm25_index_state_python`
+(`### The recommendation for the fix branch` → **What shipped.**).
 
 ### Vector agreement, and the embedder id
 
@@ -27884,6 +27942,137 @@ score is 0.2926, over its own candidates, and that pair is first among them. So 
 pair at least 0.0748 lower. The chunk's
 stored text is the same on both sides. For a negative query, Python's abstention is the correct outcome.
 
+### A fresh fixture-catalog reading, both backends as shipped
+
+**Who reads this, and what it decides.** A maintainer reading whether, with both backends now ending in the
+`REINDEX` state on `pg_textsearch` 1.5.1, arm B returns the same ordered refs on both sides of
+`fixture-catalog`.
+
+**The setup.**
+
+- **When, and at what commit.** 2026-10-22, at commit `002e7c77f9f01217d652dbaaa9b1427165f35b83`, after
+  `npm run build`, with `git status --porcelain` printing nothing. The blocks' `generatedAt` reads
+  2026-10-22T13:22:40.232Z for TypeScript and 2026-10-22T13:23:27.094Z for Python.
+- **The engines, exactly as read.**
+  - **TypeScript, PGlite.** `version()`: `PostgreSQL 18.6 (PGlite 0.5.10) on wasm32-unknown-emscripten,
+    compiled by emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.5
+    (1db513782be24469589d7cb8a1f1834e9a33f271), 32-bit`. `pg_textsearch.library_version`: `1.5.1`.
+    `extversion`: `pg_textsearch` 1.5.1, `plpgsql` 1.0, `vector` 0.8.7.
+  - **Python, the compose server.** `version()`: `PostgreSQL 18.6 (Debian 18.6-1.pgdg12+2) on
+    aarch64-unknown-linux-gnu, compiled by gcc (Debian 12.2.0-14+deb12u1) 12.2.0, 64-bit`.
+    `pg_textsearch.library_version`: `1.5.1`. `extversion`: `pg_textsearch` 1.5.1, `plpgsql` 1.0,
+    `vector` 0.8.7.
+- **The compose database.** It was not emptied: the question is about the shipped end state whatever the
+  database held. Before the Python run, `chunks` held 1454 rows and `meta`'s `index_state` read
+  `rebuilt`. After it, `index_state` read `rebuilt` and `chunks` held 41 rows.
+- **The Python package.** `harness-docs-retrieval` 0.1.0 (`docs-retrieval-service/pyproject.toml`).
+  `self-check` printed `ok` for packages (python 3.14.7) and for weights. Its `FAIL index` line is the
+  expected one for a checkout with no service config, and the Python run's own
+  `assertPythonBackendAvailable` accepted the backend.
+- **What both blocks record.** Host `darwin 24.6.0`, Node `v22.23.2`. TypeScript: embedder
+  `Xenova/bge-small-en-v1.5:q8:cls:384:v1`, reranker `Xenova/ms-marco-MiniLM-L-6-v2:q8:sigmoid:v1`.
+  Python: embedder `py-st/BAAI/bge-small-en-v1.5:fp32:cls:384:v1`, reranker
+  `py-st/cross-encoder/ms-marco-MiniLM-L-6-v2:fp32:sigmoid:v1`. Threshold `0.32`, `k` 5, `--repeat 1`, and
+  the stamp `{ files: 9, chunks: 41 }` on both. `AUTONOMOUS_SDLC_HARNESS_RETRIEVAL_STUB` was unset, as both
+  blocks record, and `HARNESS_DOCS_RETRIEVAL_DATABASE_URL` was unset, so the Python run used the compose
+  database.
+- **Where the blocks went.** Both were written into a gitignored scratch file holding only the two
+  generated-region markers, and the comparison read that file alone. Neither block is recorded in this
+  document: its generated region and `evals/docs-retrieval/floor.json` are untouched by this reading.
+- **The end state each backend's refresh leaves** is the one `### The recommendation for the fix branch` →
+  **What shipped.** states, for each backend.
+
+**The commands**, each one plain foreground call from the repository root. The compose server's engines
+and state were read in the form below, with `-c "SHOW pg_textsearch.library_version"`,
+`-c "SELECT extname, extversion FROM pg_extension ORDER BY extname"`, `-c "SELECT count(*) FROM chunks"` and
+`-c "SELECT value FROM meta WHERE key = 'index_state'"` in place of the last argument:
+
+```
+docker exec harness-docs-retrieval-postgres-1 psql -U harness -d docs_retrieval -At -c "SELECT version()"
+```
+
+PGlite's were read through `evals/docs-retrieval/bm25-history.mjs` → `openPgliteEngine()`, with these
+statements in order. The two `CREATE EXTENSION` statements come first because a fresh PGlite lists only
+`plpgsql` in `pg_extension` before them:
+
+```
+CREATE EXTENSION IF NOT EXISTS vector
+CREATE EXTENSION IF NOT EXISTS pg_textsearch
+SELECT version()
+SHOW pg_textsearch.library_version
+SELECT extname, extversion FROM pg_extension ORDER BY extname
+```
+
+The two runs, through the launcher `## How to run it` in `docs/retrieval-eval.md` gives, into a file
+created holding only `<!-- eval:generated:start -->` and `<!-- eval:generated:end -->`:
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --backend typescript --repeat 1 --out harness-runs/scratch/backend-parity/results.md
+bash scripts/scratch-run.sh harness-runs/scratch/eval.mjs --corpus fixture-catalog --backend python --repeat 1 --out harness-runs/scratch/backend-parity/results.md
+```
+
+The comparison, through `harness-runs/scratch/backend-parity/compare-scratch.mjs`. It is the launcher
+`docs/retrieval-eval.md` → `### Writing the comparison up` gives, reading that file instead of this one,
+with its imports one directory deeper:
+
+```
+import { readFileSync } from 'node:fs';
+import { parseArgs } from '../../../evals/docs-retrieval/args.mjs';
+import { compareBackends, renderBackendComparison } from '../../../evals/docs-retrieval/backend-comparison.mjs';
+const { checkout } = parseArgs([]);
+const resultsText = readFileSync(`${checkout}/harness-runs/scratch/backend-parity/results.md`, 'utf8');
+console.log(renderBackendComparison(compareBackends({ resultsText, corpusId: process.argv[2] })));
+```
+
+```
+bash scripts/scratch-run.sh harness-runs/scratch/backend-parity/compare-scratch.mjs fixture-catalog
+```
+
+**The figures**, copied from `renderBackendComparison` over the two blocks. The floor is
+`evals/docs-retrieval/floor.json` at the commit above, graded `>=`. Its arm B and arm D MRR entries were
+recorded on 2026-10-21, so those two floor cells differ from the ones in `### Relevance, side by side`.
+
+| Arm | Backend | recall@1 | recall@3 | recall@5 | MRR | Floor recall@5 | Floor MRR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| B `lexical` | TypeScript | 0.333 | 0.889 | 1.000 | 0.602 | >= 0.95: met | >= 0.55: met |
+| B `lexical` | Python | 0.333 | 0.889 | 1.000 | 0.602 | >= 0.95: met | >= 0.55: met |
+| C `vector` | TypeScript | 0.778 | 1.000 | 1.000 | 0.889 | >= 0.95: met | >= 0.83: met |
+| C `vector` | Python | 0.778 | 1.000 | 1.000 | 0.889 | >= 0.95: met | >= 0.83: met |
+| D `fused` | TypeScript | 0.444 | 1.000 | 1.000 | 0.704 | >= 0.95: met | >= 0.65: met |
+| D `fused` | Python | 0.444 | 1.000 | 1.000 | 0.704 | >= 0.95: met | >= 0.65: met |
+| E `fused-rerank` | TypeScript | 0.444 | 0.667 | 0.667 | 0.556 | >= 0.61: met | >= 0.5: met |
+| E `fused-rerank` | Python | 0.444 | 0.667 | 0.667 | 0.556 | >= 0.61: met | >= 0.5: met |
+
+**Per-query agreement**, as `### Relevance, side by side` → **Per-query agreement.** defines *same order*
+and the rank changes:
+
+| Arm | `fixture-catalog` same order | `fixture-catalog` rank changes |
+| --- | --- | --- |
+| B | 12 of 12 | none |
+| C | 6 of 12 | none |
+| D | 7 of 12 | none |
+| E | 11 of 12 | none |
+
+**Abstention.** The sets match. Both sides abstain on `q-fc-billable-weight`,
+`q-fc-surcharge-compounding`, `q-fc-verify-callback`, `q-fc-negative-recruitment`,
+`q-fc-negative-lattice` and `q-fc-negative-datastore`, and no entry's abstention disagrees with `0.32`.
+
+**Arm E's rerank scores.** The largest `|typescript − python|` of `bestRerankScore` is 0.0307, on
+`q-fc-webhook-retry` (0.5472 / 0.5779). The median over the 12 queries is 0.0002.
+
+The comparison's p50 and p95 latency columns were taken in a session and are left out.
+
+**The answer: arm B agrees on every query.** All 12 queries return the same five ordered refs on both
+sides, negatives included, and every arm B figure is equal. The remaining differences are in arms C to E
+only: ordered-ref changes on 6, 5 and 1 of the 12 queries, none of which moves a positive's first relevant
+rank. The models, divergence sources (1) and (2) of `### Divergence sources, in the order checked`, are
+the only measured candidate for them, and they stay unexplained for the reason that subsection's
+item 4 gives for arm C: the query vectors and the Python side's HNSW graph were not measured.
+
+This reading is not compared value for value with the 2026-10-08 blocks. Those were taken on
+`pg_textsearch` 1.3.1 before either fix branch. The 1.5.1 upgrade and the fix on both backends both lie
+between them and this reading, so no difference between the two could be attributed to either.
+
 ### Latency: the library call and the MCP round trip
 
 **When and where.** The operator took every figure in this section and the two after it by hand, in one
@@ -27893,7 +28082,8 @@ sitting on 2026-10-08, on the host that `harness-runs/scratch/backend-comparison
 footprint, the cold starts and the TypeScript cold build (`ranAt` 05:35:19.813Z). So the TypeScript side
 is a re-run from the same sitting, not a figure cited from another day. The protocol asks for an idle
 machine. `host.txt`'s `uptime` line reads `load averages: 1.69 1.88 1.84` at the start of the sitting,
-so the host was not idle.
+so the host was not idle. Every wall-clock figure here was taken on `pg_textsearch` 1.3.1, before the BM25
+fixes, and is left as recorded.
 
 **The library call, arm E** (`fused-rerank`, the mode the server runs), copied from the recorded blocks'
 arm E rows:
@@ -27933,7 +28123,8 @@ not restated here.
 **Two senses of *cold*, stated the way `evals/docs-retrieval/cold-build.mjs`'s header states them.**
 *Process cold* is the server process and its model load over an index that already exists. *Index cold*
 is a build into an empty index. Every figure below has a **warm model cache**: no figure includes a
-weight download.
+weight download. Every figure below was taken on `pg_textsearch` 1.3.1 on 2026-10-08, before the BM25
+fixes, and is left as recorded.
 
 **Process and model load, warm index**, from `mcp-*.txt`. `connectMs` is the MCP `connect`. `firstCallMs`
 runs from the same start until the first `search_docs` call returns, so it contains `connectMs` and the
@@ -28152,10 +28343,13 @@ from it: the server never reconnects, and the next session's fresh server recove
 
 The relevance case `### Which case this is` names is *"They disagree, and the reason is not yet
 identified."* The Python backend does not buy relevance. Arm E is identical on `fixture-catalog` and one
-recall@5 step lower on `self-docs` (0.533 against 0.600), and the lexical arm carries the
-database-history defect recorded above. On warm latency it is somewhat faster at arm E and over MCP: a
+recall@5 step lower on `self-docs` (0.533 against 0.600), and the lexical arm's divergence on 2026-10-08
+came from the index-state defect, since fixed on both backends (**Finding — a defect, since diagnosed and
+fixed.**). On warm latency it is somewhat faster at arm E and over MCP: a
 `self-docs` p50 of 499.4 against 551.0 ms at the library and 499.4 against 567.8 ms at the client. That
-is one repetition on a loaded host, so the gap is not shown to exceed run-to-run variation. Its resident
+is one repetition on a loaded host, so the gap is not shown to exceed run-to-run variation. These latency
+figures, like the cold-start ones below, were taken on `pg_textsearch` 1.3.1 on 2026-10-08, before the
+BM25 fixes, and are left as recorded. Its resident
 memory is about half: 1066256 KB for the subtree plus 37.96MiB of Postgres, against 2044608 KB.
 
 What it costs: process cold start rises from 1169.9 to 6864.1 ms. A Postgres container must be kept
@@ -28171,14 +28365,20 @@ suggests is input to a later decision by the maintainer, not a change made or qu
 ## The BM25 index's state, measured
 
 **Who reads this, and what it decides.** The maintainer deciding the route of the branch that fixes the
-BM25 scores' dependence on the `chunks_bm25` index's state. This section records the index states, the
-score each state ranks by, what still differs after `REINDEX`, the stray index-scan score, the candidate
-end-state rule and whether either mechanism moves relevance, and, under `### Route 2 on the fix branch`,
-the figures the branch implementing route 2 took, with the Python port's after-fix and real-catalog
-figures, taken on `fix_docs_retrieval_bm25_index_state_python`. Every `self-docs` figure carries the
-`{ files, chunks }` stamp of the runs that took it, and no comparison here crosses two stamps. The
-`pg_textsearch` source paths and issue numbers cited here are the leads of the task prompt that opened
-this work; none was re-read on the branch that measured them.
+BM25 scores' dependence on the `chunks_bm25` index's state. This section records, in order, how the probe
+reads a score and its setup, the score each index state ranks by, the near-tie ordering on an empty
+database, what still differs after `REINDEX`, the stray index-scan score, the candidate end-state rule at
+refresh level, and whether either mechanism moves relevance; then, under `### The deciding figures on
+pg_textsearch 1.5.1`, the same goals' deciding figures re-taken on `pg_textsearch` 1.5.1; then, under
+`### Route 2 on the fix branch`, the figures the branch implementing route 2 took, with the Python port's
+after-fix and real-catalog figures, taken on `fix_docs_retrieval_bm25_index_state_python`; and last, the
+recommendation for the fix branch. Every `self-docs` figure carries the `{ files, chunks }` stamp of the
+runs that took it, and no comparison here crosses two stamps. The `pg_textsearch` source paths and issue
+numbers cited here, except `#573`, are the leads of the task prompt that opened this work; none was re-read
+on the branch that measured them. `timescale/pg_textsearch#573` is not one of those leads: it reports
+mechanism 2 upstream, was filed by the maintainer after this diagnosis and is still open on 1.5.1; it is
+cited from the task prompt of `chore_docs_retrieval_backend_comparison_record` and was not read on that
+branch.
 
 ### How the probe reads a score, and the setup
 
@@ -28410,8 +28610,9 @@ none of the other forms. The reference build form is therefore `CREATE INDEX` ov
 
 ### The near-tie ordering on an empty database
 
-`### Divergence sources, in the order checked`, item 3, **What stays unexplained.**, records two near-tie
-pairs that the Python store's freshly built database returned against the operator's own order:
+`### Divergence sources, in the order checked`, item 3, **The near-tie pairs, since explained.**, records
+two near-tie pairs that the Python store's freshly built database returned against the operator's own
+order:
 
 - `q-fc-token-lifetime`: `docs/api-auth.md#rotating-a-key` / `#token-exchange`;
 - `q-fc-unreadable-label`: `docs/depot-operations.md#inbound-scanning` /
@@ -28437,7 +28638,8 @@ and `q-fc-token-lifetime`. Diagnostic (g) finds no inversion against `scan` in a
 against `operator` in any state after `t0`. The `operator` values equal item 3's recorded scores to six
 decimals.
 
-**Explained by mechanism 2, for the probe's states.** Both conditions hold on both engines: at `t0` each
+**Explained by mechanism 2, for the probe's states.** Mechanism 2 is the one reported upstream as
+`timescale/pg_textsearch#573`. Both conditions hold on both engines: at `t0` each
 pair is returned in `scan`'s order and against `operator`'s, and in the spilled state, `t1` on both
 engines and `t2` on PGlite, neither pair inverts. Item 3's empty database was the Python store's own fresh
 build, which this probe did not drive; whether that build leaves the index in the `t0` state is observed
@@ -28824,8 +29026,9 @@ later repetition is compared with the first repetition's, per (query, key) and p
 side only included. `bm25_summarize_index`, and on Postgres `autovacuum_count`, are read before the first
 repetition and after the last. The probe plan was the index scan at every step of every run, so no step
 was re-scored. The commands are in `docs/retrieval-eval.md` → `### The BM25 index-state probe`: the
-states-sequence and history-sequence commands with `--repeat 30` and `--repeat 15`, each with
-`--capture`.
+states-sequence and history-sequence commands with `--repeat 30` and `--repeat 15`. Every run was taken
+with `--capture` except Postgres `self-docs` run 1, which wrote no capture, as the `not captured` cells
+and "Run 1 wrote no capture" below record.
 
 **Per engine, corpus and state.** Memtable documents are `bm25_summarize_index`'s, before the first
 repetition and after the last. "Disagreeing" counts every (repetition, query, key, column) whose value
@@ -29834,8 +30037,8 @@ probe`, its closing paragraph.
 
 The question is whether the two mechanisms move the relevance eval's deterministic figures, so that they
 matter for ranking quality, or move scores only. Mechanism 2 is the index scan's exact length on memtable
-rows against the quantized length elsewhere. Mechanism 1 is the dead rows a refresh leaves in
-`total_docs` and `total_len`.
+rows against the quantized length elsewhere (`timescale/pg_textsearch#573`). Mechanism 1 is the dead
+rows a refresh leaves in `total_docs` and `total_len`.
 
 **The setup.**
 
@@ -30289,7 +30492,8 @@ Against `### The near-tie ordering on an empty database`:
 - Each of the six rows: unchanged, every value equal to the same row there.
 - Diagnostics (f) and (g): unchanged, the same 4 inversions at `t0` and none after it.
 - **Explained by mechanism 2, for the probe's states**: unchanged. On both engines each pair is still
-  returned against `operator`'s order at `t0`, in `scan`'s order, and in no spilled state.
+  returned against `operator`'s order at `t0`, in `scan`'s order, and in no spilled state. That is
+  consistent with `timescale/pg_textsearch#573`, which reports mechanism 2 still present on 1.5.1.
 
 #### The stray index-scan score, on 1.5.1
 
@@ -31906,10 +32110,10 @@ something, and the first `docs index` build, in the state `REINDEX INDEX chunks_
 the candidate rule's `bm25_spill_index` branch.** Goals 5, 1 and 3 decided it, goal 2 qualifies it, and
 goal 6 sets its priority.
 
-**Goal 4's conclusion: explained by mechanism 2.** On both engines the probe's `t0` rows return each
-`fixture-catalog` near-tie pair in `scan`'s order and against `operator`'s, and no spilled state inverts
-either (`### The near-tie ordering on an empty database`, its table's `t0` rows against its `t1`–`t4`
-rows); and the Python store's own fresh build on an empty database is that `t0` state, with 41 memtable
+**Goal 4's conclusion: explained by mechanism 2** (`timescale/pg_textsearch#573`). On both engines the
+probe's `t0` rows return each `fixture-catalog` near-tie pair in `scan`'s order and against
+`operator`'s, and no spilled state inverts either (`### The near-tie ordering on an empty database`, its
+table's `t0` rows against its `t1`–`t4` rows); and the Python store's own fresh build on an empty database is that `t0` state, with 41 memtable
 documents, no segment and both pairs inverted with the same values, neither of which is inverted after the
 spill (`### The candidate end-state rule, at refresh level`, **Observation 2**).
 
@@ -32041,8 +32245,8 @@ effect is measured on a 41-chunk corpus only.
 - **The rebuild's wall-clock cost was not measured by this branch.** Only an operator's hand run through
   the probe's `--reindex-cost` seam may supply it (`docs/retrieval-eval.md` → `### The BM25 index-state
   probe`).
-- **Every `pg_textsearch` source path and issue number cited in this section is a task-prompt lead,** not
-  re-read on this branch.
+- **Every `pg_textsearch` source path and issue number cited in this section but `#573` is a
+  task-prompt lead,** not re-read on this branch; `#573`'s provenance is stated in this section's lead.
 
 **Its standing on pg_textsearch 1.5.1.** Route 2 stands, with one qualification narrowed. Every figure here
 is quoted from `### The deciding figures on pg_textsearch 1.5.1`, whose `self-docs` runs carry `{ files:
