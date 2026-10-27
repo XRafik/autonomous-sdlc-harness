@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # The harness's own verification, as one command.
 #
-# `docs/development.md` §5 defines fourteen gates. This script runs the eight a process can run
-# unattended — gates 1, 2, 3, 4, 6, 11, 13 and 14 — and reports the six it cannot, so that a
+# `docs/development.md` §5 defines sixteen gates. This script runs the nine a process can run
+# unattended — gates 1, 2, 3, 4, 6, 11, 13, 14 and 16 — and reports the seven it cannot, so that a
 # reviewer — human or agent — reading a green result has read the whole automatable half rather than
 # one suite of it. Gate 14 depends on gate 2a's build. Three legs are SKIPPED where their tool cannot
 # be resolved: 6f where neither PATH nor `uvx` provides `typos` 1.51.1, 14c where `actionlint` is not
-# on PATH, and 14d where neither provides `zizmor` 1.30.1. Two of the eight are conditional. Gate 11 runs where the retrieval model cache is
+# on PATH, and 14d where neither provides `zizmor` 1.30.1. Two of the nine are conditional. Gate 11 runs where the retrieval model cache is
 # provisioned and the workspace's retrieval packages are installed, and is reported BLOCKED with the
 # hand-run gates where they are not. Gate 13 (the Python docs-retrieval service) reports a leg
 # BLOCKED where `uv` or its synced environment is missing, and its container leg 13d SKIPPED unless
 # HARNESS_GATES_CONTAINERS=1 is set on a machine with Docker. Neither outcome is a pass or a failure.
+# Gate 16 parses every tracked or untracked-unignored shell script with `bash -n` under `/bin/bash`,
+# the bash 3.2 floor on macOS: an unattended run refuses a free-standing `bash -n`, and this script
+# is a route to one.
 # `commands.test` in `harness.config.json` points here for exactly that reason: `npm test` is gate 4
-# alone, and a branch review that reads it as "verified" is reading the other six automatable
+# alone, and a branch review that reads it as "verified" is reading the other eight automatable
 # gates' worth of silence as a pass.
 #
 # NOT the generated `scripts/test.sh`. That file is `init`'s, it wraps whatever `commands.test`
@@ -302,6 +305,19 @@ else
   sed 's/^/        /' "$log" | tail -25
 fi
 
+echo "== gate 16 — shell scripts parse"
+# `bash -n` over every `*.sh` and every extensionless file on a bash shebang that git lists as
+# tracked or as untracked and not ignored, under `/bin/bash` where it exists — bash 3.2 on macOS,
+# the floor — and `bash` on PATH otherwise. A library with a syntax error still lets the suites that
+# source it pass, because sourcing it only prints to stderr, and an unattended run refuses a
+# free-standing `bash -n`; this gate is a route to one. `gate` prints the log on a failure only, so on a pass the
+# check's closing line, which names the interpreter and its version, is printed here.
+passed_before_16=${#passed[@]}
+gate "16 shell scripts parse" bash scripts/check-shell-parse.sh
+if [ "${#passed[@]}" -gt "$passed_before_16" ]; then
+  sed -n 's/^check-shell-parse: [0-9]/        &/p' "$log"
+fi
+
 echo
 echo "== gates this script cannot run"
 echo "  5  doctor's exit contract, by hand against gate 4's scratch repository"
@@ -310,6 +326,7 @@ echo "  8  /autonomous-sdlc-harness:harness-analyze, which is judgement and runs
 echo "  9  examples/notes-app, which installs dependencies inside the checkout"
 echo "  10 docs retrieval with the real models, which downloads them and needs a network"
 echo "  12 remote execution, against a real GitHub repository with a runner, a credential and minutes"
+echo "  15 the unattended sandbox probe, which launches claude -p with --allowedTools and a person starts"
 if [ "$floor_blocked" -eq 1 ]; then
   echo "  11 the docs-retrieval relevance floor, reported BLOCKED above: it runs unattended where the"
   echo "     retrieval model cache is provisioned and the workspace's retrieval packages are installed,"
@@ -335,7 +352,7 @@ fi
 echo "     -> docs/development.md §5"
 
 # The same conditionals the block above states, in the line a caller reads off a green run.
-hand_run="gates 5, 7, 8, 9, 10 and 12 remain hand-run"
+hand_run="gates 5, 7, 8, 9, 10, 12 and 15 remain hand-run"
 if [ "$floor_blocked" -eq 1 ]; then
   hand_run="$hand_run, and gate 11 with them — it runs unattended only where the model cache is provisioned and the workspace's retrieval packages are installed"
 fi

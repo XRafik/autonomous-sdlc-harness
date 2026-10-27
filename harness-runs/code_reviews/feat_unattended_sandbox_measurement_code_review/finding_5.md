@@ -1,0 +1,23 @@
+### 5. The Linux-legs deferral cites "sandbox3b", which resolves to nothing in the tree, instead of a numbered roadmap item
+
+**Sites:**
+- `docs/development.md` → `**The rows this probe does not take, named so the list is complete.**` — "are sandbox3b's, `feat_sandbox_probe_linux_legs`"
+- `scripts/lib/sandbox-probe/preflight.sh` (`sp_preflight`) — "the Linux legs are sandbox3b's" (the refusal message), and the header's check 2 — "The Linux legs are sandbox3b's."
+- `scripts/sandbox-probe.sh` (header) — "macOS only on this branch; the Linux legs are sandbox3b's."
+- `cli/test/sandbox-probe-shell.test.mjs` — `assertRefused(run, "this probe measures the macOS sandbox and 'uname -s' is 'Linux'; the Linux legs are sandbox3b's")`
+
+`.claude/context/conventions.md` → `## Documents of record`: *"A deferral cites a numbered roadmap item, and the number owes a row. The legend is `docs/development.md` → `## 6. The roadmap this tree defers to`."* Gate 15 defers the Linux legs to "sandbox3b", and the probe's macOS refusal tells the person who hit it that those legs are "sandbox3b's".
+
+"sandbox3b" is a label from this branch's task prompt under `harness-runs/`. No document of record defines it, so a reader of Gate 15, and a maintainer refused at a Linux terminal, gets a pointer that leads nowhere. The roadmap does carry the item this work belongs to: `docs/development.md` → `## 6` row 21, *"Measuring what the unattended sandbox breaks, and rewriting the containment statements to what it is measured to hold"*. `docs/sandbox-verification.md` already cites that row in the same way (row `CS11`: *"(roadmap item 21; …)"*).
+
+**Fix.** Replace each occurrence with the roadmap citation, keeping the branch name where it already appears:
+
+- `docs/development.md` Gate 15: *"…and the Linux-only legs are owed under roadmap item 21 (§6), on the branch `feat_sandbox_probe_linux_legs`, and this probe refuses to start off macOS."*
+- `scripts/lib/sandbox-probe/preflight.sh`, the `sp_preflight_refuse` message in check 2: `"this probe measures the macOS sandbox and 'uname -s' is '$uname_s'; the Linux legs are owed under roadmap item 21 (docs/development.md §6)"`. The header's check-2 line becomes `2. Not macOS (`uname -s` is not Darwin). The Linux legs are owed under roadmap item 21 (docs/development.md §6).`
+- `scripts/sandbox-probe.sh` header: `# macOS only; the Linux legs are owed under roadmap item 21 (docs/development.md §6).`
+- `cli/test/sandbox-probe-shell.test.mjs`: change the asserted string to `"this probe measures the macOS sandbox and 'uname -s' is 'Linux'; the Linux legs are owed under roadmap item 21 (docs/development.md §6)"`.
+
+That test file is the one this fix edits, so it is the only test file the fix runs.
+
+- **Deviations from plan:** The `cli`-layer dispatch edits only `cli/test/sandbox-probe-shell.test.mjs`; the other three sites (`docs/development.md`, `scripts/lib/sandbox-probe/preflight.sh`, `scripts/sandbox-probe.sh`) lie outside `cli/` and belong to the `.` layer. `npm test --workspace cli -- test/sandbox-probe-shell.test.mjs` was run after the edit: `# tests 12`, `# pass 10`, `# fail 2` — subtest `2. a host that is not macOS` fails because `preflight.sh` still emits `the Linux legs are sandbox3b's`, and its parent `preflight refuses in order, exit 2, leaving nothing behind` fails with it. The test passes only once the `.`-layer edit to `sp_preflight`'s check-2 message lands; rerun the same file then. The same run's stderr also carried `harness-scripts/lib/sandbox-probe/session.sh: line 313: syntax error near unexpected token '<'`, which is not this finding's and was not acted on.
+- **Deviations from plan:** The `.`-layer dispatch edited `docs/development.md` (Gate 15's **The rows this probe does not take…** paragraph), `scripts/lib/sandbox-probe/preflight.sh` (the check-2 header line and `sp_preflight_refuse` message) and `scripts/sandbox-probe.sh` (header), each to the wording the Fix gives; `grep -rn "sandbox3b" docs scripts cli plugin` now exits 1. This dispatch did not run `cli/test/sandbox-probe-shell.test.mjs`: the `cli` dispatch edited it, not this one, so under `unit_loop_core.md` → `## The test-run rule` point 1 it is not this unit's to run — deferred to the Run gates phase, whose suite runs it. Its asserted string and the new `preflight.sh` message were compared by reading and match byte for byte. `bash scripts/typecheck.sh` printed `PASS: typecheck`. Tree guard `test/main-anchor-isolation.test.mjs` (selected by the changed path `cli/test/sandbox-probe-shell.test.mjs`) ran through `npm test --workspace cli -- test/main-anchor-isolation.test.mjs`: `# tests 2`, `# pass 2`, `# fail 0`.
