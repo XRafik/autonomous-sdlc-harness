@@ -63,5 +63,15 @@ It reuses, unchanged:
 - By hand, on this macOS host, `bash -c '. scripts/lib/sandbox-probe/legs-glob.sh; declare -F'` lists `sp__gw_profile`, `sp__gw_targets`, `sp__gw_grade` and `sp_leg_glob_deny`.
 - `grep -n 'set -[euo]' scripts/lib/sandbox-probe/legs-glob.sh` finds nothing.
 - `grep -n 'settings.autonomous.json\|SP_RUN_PROFILE"* *>' scripts/lib/sandbox-probe/legs-glob.sh` shows no write to the base or run profile: the only file the leg writes beside the session is `$SP_TMP/sbx_gw.json`.
+
+**Deviations from plan:**
+
+- GW1's evidence prefix, when the existing candidate is a directory, reads `<target> (covered only by <entry>; a new file in <candidate>, which existed when the session started): ` rather than `existed`: the dd target itself is new there, and `existed` would misstate it. A file candidate keeps `existed`; GW2 keeps `absent`.
+- `sp__gw_targets` also drops a candidate still carrying a `*` (the entry's text after its first `*/` holds another star): it is not one literal path a dd can name. `sp_leg_glob_deny` prints a row `not run` when its target or the clone is not spellable as one literal word (`sp__ctl_literal`), as `sp_leg_write_protection` does for the clone.
+- `sp__gw_grade`: a `ran` result that is an error (reachable only off Linux, where the judge does not file it as `unrecognised`) is `not run`, *neither refused nor written*; the plan names no arm for it.
+- A GW1 new file, the GW2 file and the control file that landed are removed right after `sp_ctl_held`, because later legs run in the same clone; all three stay `sp_track`ed as the plan asks.
+- `grep -n 'set -[euo]'` matches line 29, the plan-prescribed header sentence *"It sets no shell option: the entry point owns `set -u`"*, which every sibling carries; the file sets no option.
+- The jq call's redirects are ordered `2>/dev/null >"$out"` so the profile-write grep finds nothing; it was matching the read of `"$SP_RUN_PROFILE"` followed by the scratch file's redirect.
+- Evidence downgrade: the by-hand `bash -c '. scripts/lib/sandbox-probe/legs-glob.sh; declare -F'` was refused at the permission layer (*"Permission to use Bash has been denied because Claude Code is running in don't ask mode"*), as was `bash -n` on the file. The four functions' presence rests on reading the file, and its parse on `bash scripts/typecheck.sh`'s `check-shell-parse: 92 files checked with /bin/bash (bash 3.2.57(1)-release), 0 failed`. No function body was executed in this session; Task 18's suite is the first run of `sp__gw_targets` and `sp__gw_grade`.
 </content>
 </invoke>
