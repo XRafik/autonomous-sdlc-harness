@@ -94,7 +94,7 @@ Each entry resolves 1:1 to `harness-runs/task_plans/feat_sandbox_probe_linux_leg
 5. [x] **Task 5** — Grade the write-protection and git legs' Linux refusals, and print the parity script's Linux expectations _(layer: general)_ _(points: 12)_
 6. [x] **Task 22** — Let N3's and N4's grades read an `unrecognised` curl error as their data _(layer: general)_ _(points: 8)_
 7. [x] **Task 6** — Add the `glob-deny` leg (GW1, GW2) _(layer: general)_ _(points: 15)_
-8. [ ] **Task 7** — Add the `registry` leg (RG1–RG3), restoring the registry's directory after RG3 on every exit path _(layer: general)_ _(points: 20)_
+8. [x] **Task 7** — Add the `registry` leg (RG1–RG3), restoring the registry's directory after RG3 on every exit path _(layer: general)_ _(points: 20)_
 9. [ ] **Task 8** — Add the `detached` leg (BG9, WF5) _(layer: general)_ _(points: 15)_
 10. [ ] **Task 9** — Add the `loopback` leg (LB1–LB5) _(layer: general)_ _(points: 20)_
 11. [ ] **Task 10** — Add the `refusal` leg (RF1–RF3) _(layer: general)_ _(points: 18)_
