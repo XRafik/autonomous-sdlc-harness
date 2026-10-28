@@ -102,7 +102,7 @@ Each entry resolves 1:1 to `harness-runs/task_plans/feat_sandbox_probe_linux_leg
 13. [x] **Task 12** — Test `sp_platform_of`, `sp_prereq_cmd` and the stamp _(layer: cli)_ _(points: 10)_
 14. [x] **Task 13** — Test refusal 2 on Linux and the refusal subcommand's preflight _(layer: cli)_ _(points: 15)_
 15. [x] **Task 14** — Test the new leg table, the Linux-only skip and the parity script's Linux text _(layer: cli)_ _(points: 10)_
-16. [ ] **Task 15** — Test PD18's evidence and the judge's Linux layers against recorded streams _(layer: cli)_ _(points: 15)_
+16. [x] **Task 15** — Test PD18's evidence and the judge's Linux layers against recorded streams _(layer: cli)_ _(points: 15)_
 17. [ ] **Task 16** — Test TD4's grading, the row choice and T3's log strings _(layer: cli)_ _(points: 12)_
 18. [ ] **Task 17** — Test the write-protection and git legs' Linux grading _(layer: cli)_ _(points: 10)_
 19. [ ] **Task 23** — Test N3's and N4's grading on Linux against their macOS twins _(layer: cli)_ _(points: 8)_
