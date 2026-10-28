@@ -15,6 +15,8 @@
 #   sbx_wf5.mtimes  `stat -f %m: <first line>`, then `mtime <n>` from hr_lane_mtime in iterations 2 and 5
 #   sbx_bg9.done    written after the last iteration
 # The probe polls from outside for sbx_bg9.done for at most SP_BG9_SECONDS + 10 seconds after the session.
+# SP_BG9_SECONDS is 60, LB5's bound: BG9 can pass only when the session ends within about 59 s of the
+# start call, and a longer session reads `not run`, never `pass` or `fail`.
 # A detached run that dies with the session is a finding (`fail`) for a follow-up task prompt, never a
 # probe change.
 #
@@ -25,7 +27,7 @@
 #
 # SOURCED, NEVER EXECUTED. It sets no shell option: the entry point owns `set -u`. Bash 3.2 floor.
 
-SP_BG9_SECONDS=20
+SP_BG9_SECONDS=60
 
 sp__bg9_grade() {
   local stream="${1:-}" cmd="${2:-}" end="${3:-}" last="${4:-}" fin="${5:-}" delta
