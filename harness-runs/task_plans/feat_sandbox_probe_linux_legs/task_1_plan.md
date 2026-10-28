@@ -46,5 +46,9 @@
 - By hand, from the repository root, `bash -c '. scripts/lib/sandbox-probe/platform.sh; sp_platform_of Darwin; sp_platform_of Linux; sp_platform_of FreeBSD; echo "rc=$?"'` prints `macos`, `linux` and `rc=1`.
 - By hand, `bash -c '. scripts/lib/sandbox-probe/platform.sh; SP_PLATFORM=linux; sp_stamp' 2>&1 >/dev/null` on this macOS host prints eight `sandbox-probe: stamp:` lines. Here `bwrap --version` and `socat -V` read `not found`, and the AppArmor key reads `absent`.
 - `grep -n 'set -[euo]' scripts/lib/sandbox-probe/platform.sh` finds nothing: a sourced library sets no shell option.
+- **Deviations from plan:**
+  - The `grep -n 'set -[euo]'` bullet cannot find nothing: the header paragraph this plan mandates (*"the entry point owns `set -u`"*, carried by every sibling) matches it. Run from the repository root, the grep's one hit is that header comment line; no executable `set` line exists in the file.
+  - Unspecified edge: an os-release file that is readable but carries no `PRETTY_NAME=` line gives the `distribution` value `absent`, stated in the file header.
+  - Evidence downgrade: both `By hand` `bash -c '…'` bullets were refused at the permission layer in this run ("Permission to use Bash has been denied because Claude Code is running in don't ask mode"), so neither was executed and no probe was used to route around the refusal. The `sp_platform_of` outputs and the eight Linux-stamp keys rest on reading the code only; Task 12's tests are the executed evidence. The type check (`bash scripts/typecheck.sh`, which parsed the new untracked file: its parse check lists `git ls-files --cached --others --exclude-standard`) passed: `check-shell-parse: 91 files checked with /bin/bash (bash 3.2.57(1)-release), 0 failed`, `PASS: typecheck`.
 </content>
 </invoke>

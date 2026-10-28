@@ -87,7 +87,7 @@ Task numbers are ids, not positions. Tasks 22 and 23 were added in revision, and
 
 Each entry resolves 1:1 to `harness-runs/task_plans/feat_sandbox_probe_linux_legs/task_<K>_plan.md`.
 
-1. [ ] **Task 1** — Add the probe's platform library: `sp_platform_of`, `sp_prereq_cmd` and the stamp _(layer: general)_ _(points: 10)_
+1. [x] **Task 1** — Add the probe's platform library: `sp_platform_of`, `sp_prereq_cmd` and the stamp _(layer: general)_ _(points: 10)_
 2. [ ] **Task 2** — Declare the Linux legs and rows, admit Linux at preflight refusal 2, and add the `refusal` subcommand with its narrower preflight _(layer: general)_ _(points: 20)_
 3. [ ] **Task 3** — Fix PD18 in the judge, and add the Linux refusal string and the `unrecognised` layer _(layer: general)_ _(points: 15)_
 4. [ ] **Task 4** — Take TD4 with TD3's expectation and T3 in place of TD2 and T2 on Linux _(layer: general)_ _(points: 15)_
