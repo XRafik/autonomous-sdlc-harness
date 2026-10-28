@@ -7,8 +7,8 @@
 # filename pattern is bound to one (engine command, worktree strategy) pairing:
 #
 #   <branch>_task_prompt.md   -> /branch-start-plan-autonomous
-#                                a fresh sibling working copy off the default
-#                                branch (create-worktree.sh)
+#                                a fresh sibling clone off the default branch
+#                                (create-worktree.sh)
 #   <branch>_review[_<n>].md  -> /branch-start-user-review-fix-autonomous
 #                                the branch's existing working copy when it is
 #                                still usable, else recreated for that branch
@@ -57,6 +57,12 @@
 # gate publishes into and every start consults, described below them.
 # `classify_run_exit` is only ever called from inside the subshell `spawn_engine`
 # spawns, which is the one place the engine's real exit code exists.
+# Before it, after every session, that subshell's `record_run_analytics` runs
+# run-analytics.sh over the run's stream and commits the per-session record it
+# writes under `<state_dir>/run_analytics/<branch>/` on the run's branch by
+# plumbing, then, outside a job, pushes the branch when it committed —
+# best-effort: a failure, a push that did not land on origin included, is one
+# watcher-log line and changes no classification, exit code or notification.
 #
 # THE STALENESS WATCHDOG HEALS WHAT THE RECONCILE PASS CANNOT SEE. That pass
 # heals a run whose PROCESS IS ALREADY GONE. A run whose process is alive but
@@ -84,13 +90,60 @@
 #     proceed into classify_run_exit and stamp a status this teardown did not
 #     intend — and the pre-captured descendants are signalled after it.
 #   * THE RESET-AND-RESUME IS SAFE BECAUSE OF THE FLOWS' COMMIT-PER-UNIT
-#     INVARIANT: HEAD is always a valid checkpoint, so `git reset --hard HEAD`
-#     discards only the dead dispatch's UNCOMMITTED work, which the resumed run
-#     re-does from the committed ledger or checklist. Restarts are counted per
-#     run and capped; past the cap, or with the working copy gone, the run is
-#     marked `failed` with the reason in the notification instead of restarted.
+#     INVARIANT: the branch tip is always a valid checkpoint, so resetting the
+#     copy's index and tree to it discards only the dead dispatch's UNCOMMITTED
+#     work, which the resumed run re-does from the committed ledger or
+#     checklist. Restarts are counted per run and capped; past the cap, or with
+#     the working copy gone, the run is marked `failed` with the reason in the
+#     notification instead of restarted.
+#   * THE RESET IS PINNED AND CAN BE REFUSED. The copy is first checked against
+#     the main checkout's own records; the reset (`hr_run_reset_var`) runs no
+#     hook and moves no ref, and refuses a tip whose commits change a protected
+#     path against origin's default branch, an unreachable origin included. In
+#     job mode a job-surfaces check comes first (see JOB MODE). A refusal gives
+#     the run up as `failed`, naming the reason, and the recovery note is
+#     written only to a state directory reached without a symbolic link.
 #   * IT IS SKIPPED ENTIRELY WHILE A USAGE HOLD IS IN EFFECT, because the usage
 #     machinery owns run state for as long as that marker is there.
+#   * SILENCE IS MEASURED FROM THE LATER OF THE LIVENESS MTIME AND THE LAST
+#     DETECTED HOST WAKE. A pass that starts more than POLL_INTERVAL_SECS +
+#     STALL_WAKE_GAP_SECS after the previous one records a wake
+#     (`<logs>/.host_last_tick`, `<logs>/.host_woke_at`), so a run that was
+#     silent only because the host slept is not killed on waking. A gap also
+#     reads as a wake after the watcher was stopped, which costs at most one
+#     deferred STALL_KILL_SECS window. A genuinely hung run with no gap is
+#     killed exactly as before.
+#
+# KEEP AWAKE. Every local launch holds the host awake for the engine's life, so
+# an unattended run is not frozen by idle sleep or a closed lid.
+#
+#   * WHAT HOLDS. macOS: `caffeinate -s -i -w <engine pid>` — `-s` is AC-only,
+#     so a Mac on battery still sleeps. Linux: a logind `sleep` plus
+#     `handle-lid-switch` block lock through `systemd-inhibit`, taken only on
+#     mains power. WSL2 and every other host hold nothing, and say why. Job
+#     mode and GITHUB_ACTIONS=true hold nothing, silently: a runner does not
+#     sleep. `execution.keepAwake` false is also silent (`status` still names
+#     it); a non-boolean value, a missing tool and WSL2 log one
+#     `keep-awake: not holding …` line per launch.
+#   * THE HOLD IS TAKEN FOR THE ENGINE'S OWN PID. The launch pipe's head runs
+#     keep_awake_start and then `exec`s into the engine, so the pid it read
+#     with `$(exec sh -c 'echo "$PPID"')` is the engine's — bash 3.2 has no
+#     per-subshell pid variable. `rc` is unchanged: PIPESTATUS[0] is now the
+#     engine's own status rather than a subshell's carrying it.
+#   * THE HOLD CANNOT OUTLIVE THE RUN. `caffeinate -w` exits with the engine,
+#     and the logind holder's command is a waiter polling `kill -0` on it. A
+#     normal exit and a crash end the engine, and the hold with it. The
+#     watchdog's `kill -9` reaches the holder too: it was started by the head
+#     before the `exec`, so it is the engine's child and in the descendant set
+#     captured before the kill. A usage-gate pause ends the session itself.
+#   * LINUX RE-CHECKS MAINS POWER EVERY PASS (keep_awake_pass): on battery the
+#     hold is released, on AC it is taken again, when the mode turns `off`
+#     every live holder is dropped, and when it holds again — the key turned
+#     back on, or a configuration that reads again — a released record is held
+#     again, on either platform. It runs ahead of the kill-switch
+#     return, because the brake stops launches and resumes, not runs in flight,
+#     and the hold those runs carry must still follow power and the key. A
+#     `refused` or `failed` hold is never retried.
 #
 # THE USAGE GATE ACTS ON THE ONE SIGNAL NO RUN CAN OBSERVE ABOUT ITSELF. The
 # rate limits it exists for are ACCOUNT-GLOBAL, and they are reported as
@@ -169,8 +222,9 @@
 #
 # WHAT IT COMMITS, AND WHAT IT POINTEDLY DOES NOT. A dropped task prompt and a
 # dropped docs checklist are copied into the run's working copy and COMMITTED
-# there before the run starts, through the same commit wrapper every other
-# unattended commit point calls: the engine's own "working tree clean"
+# there before the run starts, by the watcher's own commit — plumbing in the main
+# checkout that runs no hook, commits that one path and nothing else the run
+# staged, and refuses a protected branch: the engine's own "working tree clean"
 # precondition has to be honest from its very first step, and a prompt left
 # uncommitted is lost when the branch reaches a pull request. A dropped REVIEW
 # file is placed and NEVER committed — the flow's own commits pick it up — on a
@@ -199,13 +253,17 @@
 #     `origin/<branch>`, so a review left uncommitted would not reach it, and a
 #     job boundary before the flow's own commit would lose it. The working copy
 #     is first fast-forwarded to `origin/<branch>`, because the job, not this
-#     copy, is where the branch advanced.
+#     copy, is where the branch advanced: fetched in the main checkout, pinned,
+#     only when its `.git/config` names origin's URL, and moved by the library's
+#     fast-forward, which refuses a target that changes a protected path. The
+#     commit is the watcher's, with no hook (WHAT IT COMMITS above).
 #   * A FAILED COMMIT OR PUSH BLOCKS A REMOTE DISPATCH, for all three artifacts,
 #     while it never blocks a local launch. A local run executes in the working
 #     copy that holds the file; a remote job sees only what was pushed. An
 #     identical re-drop still skips the commit, but its push must still land —
 #     the earlier drop's push may be the one that failed. push-branch.sh exits
-#     0 on every path, so "landed" is read as `origin/<branch>` equal to HEAD.
+#     0 on every path, so "landed" is read in the main checkout as
+#     `refs/remotes/origin/<branch>` equal to `refs/heads/<branch>`.
 #   * NOTHING LOCAL WATCHES, GATES, RESTARTS OR RESUMES A REMOTE RUN ON ITS
 #     OWN. Skipped for such a record: the vanished-process reconcile, the cap
 #     count, the stall watchdog, both halves of the usage gate, and the lane's
@@ -217,6 +275,43 @@
 #
 # A remote run's local working copy is a MIRROR that `remote-run.sh sync`
 # fills; it is stopped through `remote-run.sh stop`.
+#
+# THE WATCHER'S GIT IN A RUN'S COPY. A run's working copy is written by a
+# sandboxed session, and this script runs unsandboxed, so a git call made in
+# that copy would load what the session wrote there: its `config.worktree`
+# (`core.fsmonitor`, `core.sshCommand`, `remote.*`), its hooks, `.gitattributes`
+# drivers, submodule configuration, and its `.git` pointer or worktree record.
+# The watcher therefore makes none. RUN_MAIN, the main checkout placed from this
+# script's location without git, anchors every call, and a call that cannot be
+# anchored refuses. Class by class:
+#
+#   * READS that used to ask the copy — the reused copy's branch — are made once,
+#     from the main checkout, by `hr_run_copy_check_var`, which also refuses a
+#     copy this repository does not list.
+#   * CALLS THAT RUN CODE — the clean test, the remote arm's fetch and
+#     fast-forward, the artifact commits, the watchdog's reset — go through the
+#     library's pinned runners: no hook, no fsmonitor, no submodule recursion,
+#     never the copy's `.git`, and a remote only when the main `.git/config`
+#     names its URL. The fast-forward, the reset and the reused copy's surface
+#     check refuse a branch that changes a protected path against origin's
+#     default-branch commit. The artifact commit is plumbing that commits one
+#     path, and the landed test reads the main checkout's refs.
+#   * THE EXIT SYNC — at every run exit, a clone's branch is brought into the
+#     main checkout by `hr_run_copy_check_var` (its sync-in: a fetch into the
+#     main repository and a compare-and-swap of `refs/heads/<branch>`), so the
+#     main checkout's branch shows what the run committed; a refusal, an
+#     unplaced RUN_MAIN included, is one log line and never changes how the
+#     run's exit is classified.
+#   * A FRESH COPY create-worktree.sh has just cut is a trusted tree: it is cut
+#     from the commit origin reported, and no session has run there; only the
+#     commit call changed. Its command lines, and `--existing`'s, are unchanged.
+#   * READS ON REGISTRY ROOTS (`footprint_grade`) stay as they are: those are
+#     adopters' main checkouts, and `rev-parse` runs no hook or fsmonitor.
+#   * IN JOB MODE, the watchdog's job-surfaces check runs `npx` outside the
+#     checkout (see JOB MODE).
+#
+# The rules every hardened call holds are lib/harness-run-lib.sh's, in the
+# section THE WATCHER FAMILY'S GIT IN A RUN'S COPY.
 #
 # THE AGENT BINARY IS REACHED THROUGH ONE VARIABLE, `${HARNESS_AGENT_CLI:-claude}`,
 # resolved once below. It defaults to the real CLI, so an operator sees no
@@ -237,7 +332,9 @@
 # script's own location, and the MAIN checkout — the first working copy git lists
 # — is the one that holds the inbox, the logs, the registry and the kill switch,
 # so every run is tailable and stoppable from ONE place while executing in its own
-# sibling working copy — except under `job`, where the main checkout and the
+# sibling working copy — a clone (`copy_kind` `clone` in its registry record),
+# or, for a run started before clones, a legacy linked worktree, supported
+# until none is left — except under `job`, where the main checkout and the
 # working copy are the same directory, the job's own checkout (see JOB MODE);
 # and except for a record with `execution: github-actions`, whose run executes
 # in a GitHub Actions job, whose local working copy is a mirror that
@@ -313,15 +410,29 @@
 # stream tee, classify_run_exit, park-loop guard, stall watchdog and usage gate
 # a local run gets — the job does for itself what this daemon does locally.
 #
-#   * REFUSED UNLESS HARNESS_JOB_MODE=1. The stall watchdog's `git reset --hard
-#     HEAD` acts on the checkout the job runs in, and job mode treats that
+#   * REFUSED UNLESS HARNESS_JOB_MODE=1. The stall watchdog's reset to the last
+#     commit acts on the checkout the job runs in, and job mode treats that
 #     checkout as both the main one and the working copy; run by accident in a
 #     developer's checkout it would discard work. Only the workflow sets it.
+#   * THE WATCHDOG'S RESET IS GATED ON THE JOB SURFACES. Before it, the job runs
+#     `npx --yes autonomous-sdlc-harness@$HARNESS_CLI_VERSION doctor --cwd
+#     <checkout> --job-surfaces=<default branch>@<commit>@<base>` from a fresh
+#     empty temporary directory, never from the checkout, whose `.npmrc` and
+#     `node_modules` the session can write. The branch, commit and base are
+#     HARNESS_GITHUB_DEFAULT_BRANCH, HARNESS_GITHUB_DEFAULT_COMMIT and
+#     HARNESS_DEFAULT_BRANCH_COMMIT, recorded by harness-run.yml before any
+#     session ran, so no ref the session could move is the base. A non-zero exit, or any of those values or HARNESS_CLI_VERSION
+#     empty, gives the run up as `failed`.
 #   * OFF: the inbox pass, the cleanup sweep, the live-log window, and the
 #     machine lane (both halves). The lane is local-only, and on a hosted runner
 #     its directory would not outlive the job. They are forced off AFTER the
 #     override channel and the tunable defaults, so no environment value turns
 #     them back on.
+#   * THE PROFILE IS THE BASE, CHECKED: job mode passes
+#     .claude/settings.autonomous.json to --settings after the same launch check
+#     a local run's per-run copy gets, and renders no per-run copy — the lane is
+#     off, and the copy would equal the base: the run copy is the main checkout,
+#     and the job's fresh checkout has no other linked worktree.
 #   * THE REGISTRY is the checkout's gitignored one, ephemeral by construction;
 #     what must cross a job boundary rides in the remote state bundle's
 #     `status.json`, restored to `autonomous_logs/remote_status.json` before the
@@ -428,6 +539,12 @@
 #     and skip Phase E / R4, and a `completed` run's one notification names the
 #     skip and `/autonomous-sdlc-harness:branch-qa-test <branch>` as the local
 #     route. The docs engine has no such phase; a local launch gets no clause.
+#   * RUN ANALYTICS: after every session, auto-resumes included, the same
+#     `record_run_analytics` a local run gets records it under
+#     `<state_dir>/run_analytics/<branch>/` and commits it on the branch by
+#     plumbing, best-effort, but does not push it: the workflow's `Push the
+#     branch` step, which runs under always() after the job's last session,
+#     pushes it.
 #
 # Subcommands:
 #   autonomous-watcher.sh            # the watch loop (the default; the unit uses this)
@@ -484,6 +601,7 @@
 #                    leaves the functions defined, which is how a pure reader is
 #                    reached at all; `bash -c` because another shell need not pass
 #                    a positional argument to a sourced file the same way
+#                 -> the live-pid record with "status":"completed" gives exactly `0`
 #   overrides     printf 'POLL_INTERVAL_SECS=99\n' > \
 #                   "${XDG_CONFIG_HOME:-$HOME/.config}/autonomous-sdlc-harness/watcher.env"
 #                 -> the tunables line shows 99, and POLL_INTERVAL_SECS=7 in the
@@ -553,6 +671,17 @@
 #                 `park_loop` record for that branch it is archived as
 #                 rejected_<ts>_… and that record is byte-identical afterwards;
 #                 with a LIVE `running` record it is archived as dup_<ts>_…
+#   no sandbox    `a drop`, with the sourced probe overridden to report a
+#                 missing piece:
+#                   HARNESS_AGENT_CLI="$s" bash -c '. "$1" status >/dev/null
+#                     hr_sandbox_prereq_probe_var() { HR_SANDBOX_MISSING="bwrap socat"
+#                       HR_SANDBOX_REFUSAL="needs bubblewrap"; return 1; }
+#                     tick; wait' _ "$d/scripts/autonomous-watcher.sh"
+#                 -> the record `failed`, the inbox file archived as
+#                    failed_<ts>_feat_x_task_prompt.md, ONE `failed`
+#                    notification naming bubblewrap, and the stub NOT launched.
+#                    A non-blank `"sandbox":{"optOut":{"reason":"…"}}` in
+#                    "$d/harness.config.json" -> it launches
 #   a resume      from a `parked` record whose run wrote question_1.md,
 #                 question_2.md and question_3.md under
 #                 "$d/sdlc-harness/clarifications/feat_x/", write answer_1.md and
@@ -610,9 +739,26 @@
 #                    ALIVE afterwards. STALL_MAX_RESTARTS=0 -> `failed`, the
 #                    reason in the notification, no restart — as does removing
 #                    "$w/demo-feat_x" first, naming the missing working copy.
+#                    The reset asks origin for the default branch's commit, so
+#                    the fixture needs `a drop`'s origin; without one the run
+#                    is given up, naming that.
 #                    `touch "$d/sdlc-harness/autonomous_logs/.usage_hold"` ->
 #                    the whole pass is skipped even past the kill threshold, and
 #                    STALL_CHECK_ENABLED=0 does the same
+#   a hold        put a stub `caffeinate` that saves its "$@" and its own $$
+#                 first on PATH, then launch as `a launch` does with a stub that
+#                 SLEEPS
+#                 -> watcher.log carries `keep-awake: holding the host awake for
+#                    'feat_x' (caffeinate pid <h>, engine pid <e>)`, the stub's
+#                    saved argv is `-s -i -w <e>`, its $$ is <h>, and the record
+#                    carries engine_pid <e>, keep_awake held, keep_awake_pid <h>
+#   a wake        with `a stall`'s back-dated liveness files and its sleeping
+#                 stub, back-date the last pass:
+#                   echo $(( $(date +%s) - 4000 )) > \
+#                     "$d/sdlc-harness/autonomous_logs/.host_last_tick"
+#                 -> STALL_WARN_SECS=1 STALL_KILL_SECS=2 bash …/autonomous-watcher.sh
+#                    tick logs `host-wake:` and `measuring silence from the wake`,
+#                    no `is hung` line, and the run is still `running`
 #   the usage     with a LIVE `running` record (the sleeping stub above), append
 #   gate          one event to its stream and read the gate without acting:
 #                   printf '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"five_hour","resetsAt":%s,"isUsingOverage":false}}\n' \
@@ -742,6 +888,31 @@
 #                    `git -C "$w/demo-feat_x" log -1 --format=%s` is
 #                    `chore: add user review for feat_x`, pushed, and ONE
 #                    `-f engine=user_review` dispatch recorded
+#   refused reuse `a drop`'s fixture with feat_x completed and its copy in
+#                 place; commit `.mcp.json` onto feat_x by plumbing, with no
+#                 hook or checkout:
+#                   b=$(git -C "$d" hash-object -w --stdin </dev/null)
+#                   t=$( (git -C "$d" ls-tree feat_x; printf '100644 blob %s\t.mcp.json\n' "$b") | git -C "$d" mktree)
+#                   git -C "$d" update-ref refs/heads/feat_x "$(git -C "$d" commit-tree "$t" -p feat_x -m payload)"
+#                 then bring the copy level with it
+#                 (`git -C "$w/demo-feat_x" read-tree -u -m HEAD`), drop
+#                 feat_x_review.md and tick
+#                 -> the record `failed`, the inbox file archived as
+#                    failed_<ts>_feat_x_review.md, ONE `failed` notification
+#                    saying the branch carries changes to files that run outside
+#                    the sandbox and naming .mcp.json, and the stub NOT launched
+#   refused reset `a stall`'s kill setup, with the same plumbing commit of
+#                 `.mcp.json` onto the running branch first
+#                 -> the record `failed`, ONE `failed` notification naming
+#                    `the reset was refused` and .mcp.json, stall_restarts
+#                    unchanged, PAUSE_PROGRESS.md not written, and the stub NOT
+#                    relaunched
+#   refused ff    `remote review`'s fixture, with the commit pushed to origin's
+#                 feat_x from elsewhere adding `.mcp.json`
+#                 -> no `workflow run` recorded, the record `failed`, ONE
+#                    `failed` notification naming the fast-forward and
+#                    .mcp.json, and refs/heads/feat_x and the copy's tree as
+#                    they were
 #   remote skips  that record `running` with an empty pid -> tick after tick it
 #                 stays `running` with no `failed` notification, a local drop in
 #                 the same tick still launches under MAX_PARALLEL_RUNS=1, its
@@ -825,7 +996,8 @@ fi
 
 # -----------------------------------------------------------------------------
 # Anchors. All central state lives in the MAIN checkout; a run executes in a
-# sibling working copy — under `job`, the main checkout and the working copy are
+# sibling clone, or a legacy linked worktree for a run started before clones —
+# under `job`, the main checkout and the working copy are
 # the same directory, the job's own checkout, which the first working copy
 # `git worktree list` reports already yields (see JOB MODE in the header); for
 # a record with `execution: github-actions` the run executes in a GitHub Actions
@@ -836,6 +1008,18 @@ fi
 # -----------------------------------------------------------------------------
 MAIN_REPO="$(hr_main_repo "$SCRIPT_DIR")" || MAIN_REPO=""
 [ -n "$MAIN_REPO" ] || fatal "'$SCRIPT_DIR' is not inside a git repository — refusing to start"
+
+# The main checkout every git call in a run's copy is anchored on, placed from
+# this script's own location without git (`hr_wrapper_main_of`). Empty when that
+# fails or names another directory than MAIN_REPO; never fatal, because only the
+# hardened sites need it, and each refuses on an empty value with
+# RUN_MAIN_REFUSAL (THE WATCHER'S GIT IN A RUN'S COPY in the header).
+RUN_MAIN_REFUSAL="cannot place the watcher in a main checkout"
+RUN_MAIN="$(hr_wrapper_main_of "$SCRIPT_DIR")" || RUN_MAIN=""
+if [ -n "$RUN_MAIN" ] &&
+  [ "$RUN_MAIN" != "$( CDPATH= cd -P -- "$MAIN_REPO" 2>/dev/null && pwd -P)" ]; then
+  RUN_MAIN=""
+fi
 
 # Warm the library's per-process cache once, unsubstituted, and make the refusal
 # here rather than letting each reader below fail separately with its own message.
@@ -871,28 +1055,35 @@ USAGE_HOLD="$LOGS_DIR/.usage_hold"
 # must cost output quality, never the run.
 NOTIFY="$SCRIPT_DIR/autonomous-notify.sh"
 FORMAT_STREAM="$SCRIPT_DIR/autonomous-format-stream.sh"
+# The run-analytics recorder, a sibling on the same terms: a missing one costs
+# the record, never the run (record_run_analytics).
+RUN_ANALYTICS="$SCRIPT_DIR/run-analytics.sh"
 
-# The working-copy lifecycle scripts and the two git wrappers, resolved as
+# run_analytics_subject <branch> — the one producer of this fixed-form subject.
+run_analytics_subject() { printf 'chore: Record run analytics for %s\n' "$1"; }
+
+# The working-copy lifecycle scripts and the push wrapper, resolved as
 # siblings for the same reason: they are written into the same configured
 # `scriptsDir` this script is. WHICH COPY EXECUTES NEVER DECIDES WHICH REPOSITORY
 # IS ACTED ON — create-worktree.sh and cleanup-merged-worktrees.sh derive the main
-# checkout for themselves through the shared library, and the two wrappers are
-# always handed the working copy to operate in explicitly. Routing the prompt
-# commit through the wrapper rather than issuing `git commit` here is what makes
-# this commit point inherit the wrapper's protected-branch refusal instead of
-# re-implementing it.
+# checkout for themselves through the shared library, and the push wrapper is
+# always handed the working copy to operate in explicitly. The artifact commit
+# is not routed through `commit-on-branch.sh`: that wrapper stages its paths
+# into the run's own index and judges the run's working copy, so the watcher
+# commits one placed path by plumbing in the main checkout instead
+# (`hr_commit_placed`), which applies the same protected-branch refusal from
+# the main checkout's configuration.
 CREATE_WORKTREE="$SCRIPT_DIR/create-worktree.sh"
 CLEANUP_SCRIPT="$SCRIPT_DIR/cleanup-merged-worktrees.sh"
-COMMIT_ON_BRANCH="$SCRIPT_DIR/commit-on-branch.sh"
 PUSH_BRANCH="$SCRIPT_DIR/push-branch.sh"
 # The one route to GitHub — job mode's two read verbs, and the inbox pass's
 # `dispatch` and `sync` (REMOTE DISPATCH) — resolved the same way.
 REMOTE_RUN="$SCRIPT_DIR/remote-run.sh"
 
-# The unattended permission profile, resolved in the MAIN checkout even though a
-# run executes elsewhere: every working copy carries the same committed file, and
-# the absolute paths inside it resolve identically whichever one is used — so the
-# main copy is the one that cannot drift per worktree.
+# The BASE unattended permission profile, resolved in the MAIN checkout even
+# though a run executes elsewhere: the copy a session could edit is never the
+# one read. Outside job mode every session gets a per-run copy derived from it
+# (THE PER-RUN PROFILE, run_profile_render); in job mode it is passed as is.
 SETTINGS_PROFILE="$MAIN_REPO/.claude/settings.autonomous.json"
 
 # The model an unattended run is launched with, and the three engine commands the
@@ -993,8 +1184,15 @@ POLL_INTERVAL_SECS="${POLL_INTERVAL_SECS:-15}"
 # The permission mode an unattended run is launched with. Deliberately NOT a
 # permission-bypass mode: the generated profile's deny floor is the thing that
 # keeps an unattended run inside its lane, and bypassing it would make every
-# refusal in this family decorative.
-PERMISSION_MODE="${PERMISSION_MODE:-acceptEdits}"
+# refusal in this family decorative. Under `dontAsk` a call the profile neither
+# allows nor denies, or one that hits an `ask` rule, is refused at once, so a
+# profile gap shows up as a refusal in the run's stream rather than as a session
+# waiting on a prompt. It also refuses a host outside the sandbox's allowed
+# domains, which is what holds if `strictAllowlist` is not honoured from
+# `--settings`. `job` mode reads this same variable, so a remote run launches
+# under `dontAsk` too. Override: `PERMISSION_MODE=acceptEdits` in `watcher.env`
+# restores prompting, under which those calls stall the run.
+PERMISSION_MODE="${PERMISSION_MODE:-dontAsk}"
 # Throttle for the merged-working-copy cleanup sweep (housekeeping, in `tick`).
 CLEANUP_INTERVAL_SECS="${CLEANUP_INTERVAL_SECS:-300}"
 # When that sweep last ran. STATE, not a tunable — assigned plainly rather than
@@ -1032,6 +1230,10 @@ STALL_MAX_RESTARTS="${STALL_MAX_RESTARTS:-2}"
 # instantaneous sample, which is what makes it usable as evidence at all. A small
 # non-zero floor is right because idle interpreter and shell noise rounds to ~0.
 STALL_BUSY_CPU_PCT="${STALL_BUSY_CPU_PCT:-1}"
+# A pass that starts more than POLL_INTERVAL_SECS + this many seconds after the
+# previous one reads as a host wake (host_wake_pass), and the watchdog measures
+# silence from that wake rather than across the sleep.
+STALL_WAKE_GAP_SECS="${STALL_WAKE_GAP_SECS:-300}"
 
 # The park-loop guard (classify_run_exit; clear_park_loops). How many CONSECUTIVE
 # park-resumes that made no progress mark the run `park_loop`, after which it is
@@ -1193,6 +1395,18 @@ if [ "${1:-}" = "job" ]; then
   fi
 fi
 
+# The keep-awake decision (KEEP AWAKE in the header), copied out of the
+# library's result variables. Resolved here, after JOB_MODE, so `status` reports
+# it, and again by every tick after its config reload, so an edit to
+# `execution.keepAwake` takes effect on the next pass.
+keep_awake_resolve() {
+  hr_keep_awake_mode_var "$MAIN_REPO" "$JOB_MODE"
+  KEEP_AWAKE_MODE="$HR_KEEP_AWAKE_MODE"
+  KEEP_AWAKE_REASON="$HR_KEEP_AWAKE_REASON"
+  KEEP_AWAKE_QUIET="$HR_KEEP_AWAKE_QUIET"
+}
+keep_awake_resolve
+
 mkdir -p "$INBOX_DIR" "$LOGS_DIR" "$ARCHIVE_DIR" ||
   fatal "could not create the state directories under '$MAIN_REPO' — refusing to start"
 
@@ -1257,7 +1471,15 @@ job_report() {
 # run on the same branch (a user-review fix after a completed task run) reuse the
 # record rather than shadow it. The documented field set:
 #
-#   pid                 the launched process
+#   pid                 the launch subshell's pid, written by spawn_engine after
+#                       `status running`; cleared in the same write that sets
+#                       `completed` or `failed`, and cleared again by a fresh
+#                       launch. A session that ends before the parent's pid write
+#                       can leave a terminal record holding its own dead
+#                       subshell's pid, which the status filter ignores. A
+#                       `parked`, `paused` or `park_loop` record keeps it until
+#                       the next spawn overwrites it. No reader trusts it on a
+#                       record that is not `running`
 #   branch              the key, stamped into the record so it travels with it
 #   worktree            the working copy the run executes in
 #   status              running | parked | park_loop | paused | completed | failed.
@@ -1322,6 +1544,23 @@ job_report() {
 #                       dying under the kill would otherwise fire a spurious
 #                       `failed` over the status this pass sets. Cleared on every
 #                       arm of the teardown, including the give-up one.
+#   stall_wake_noted    the `.host_woke_at` epoch for which check_stalled_runs
+#                       last logged `measuring silence from the wake`, so one
+#                       wake is logged once per run. Written by
+#                       check_stalled_runs only. Left in place across launches,
+#                       since a later wake carries a different epoch.
+#   engine_pid          the engine's own pid, the one the launch pipe's head
+#                       `exec`s into. Written by keep_awake_start at every local
+#                       launch. Distinct from `pid`, which stays the outer
+#                       subshell. Overwritten by the next launch, never cleared.
+#   keep_awake          held | battery | refused | failed | off. Written by
+#                       keep_awake_start at launch and rewritten by
+#                       keep_awake_pass on a Linux power transition or a switch
+#                       to `off`. Describes the current session only. Never
+#                       written in job mode.
+#   keep_awake_pid      the holder's pid (`caffeinate` or `systemd-inhibit`)
+#                       while `keep_awake` is `held`. Written by keep_awake_start
+#                       and keep_awake_pass. Empty in every other state.
 #   paused_by           `usage` while THIS run's pause was requested by the usage
 #                       gate, and empty otherwise — which is the whole of how a
 #                       gate pause is told apart from a hand-dropped one. A hand
@@ -1439,7 +1678,7 @@ reconcile_stale_runs() {
     if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
       if [ "$(registry_get "$b" status)" = "running" ]; then
         log "reconcile: run '$b' (pid ${pid:-?}) is gone but still marked running -> failed"
-        registry_set "$b" status failed
+        registry_set "$b" status failed pid ""
         notify failed "$b" "$(registry_get "$b" log_path)" "(process vanished)"
       fi
     fi
@@ -1451,12 +1690,20 @@ EOF
 # Runs marked `running` whose process is still alive. A PURE READER: its ONLY
 # stdout is the final integer, because the cap check captures it with `$(…)`.
 # Healing a vanished process belongs to reconcile_stale_runs(), above.
+# `running` is the only status that holds a slot. The status filter is what keeps
+# a finished record's pid, once the OS reuses it, from holding one — a terminal
+# write drops the pid, but a session that exits before spawn_engine's parent
+# writes `pid "$!"` leaves its own dead subshell's pid on a terminal record. The
+# filter cannot count out a run being launched: every launch and resume path
+# writes `status running` before spawn_engine writes the pid, and the watcher
+# runs each spawn to completion before its next capacity read.
 running_count() {
   local n=0 b pid
   while IFS= read -r b; do
     [ -n "$b" ] || continue
     # A remote run holds no local slot: the job gates itself.
     record_is_remote "$b" && continue
+    [ "$(registry_get "$b" status)" = "running" ] || continue
     pid="$(registry_get "$b" pid)"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       n=$((n + 1))
@@ -1517,6 +1764,7 @@ footprint_machine_cap() {
 footprint_grade() {
   local root="${1-}" unit="${2-}" out top rc
   [ -d "$root" ] || { printf 'root-missing\n'; return 0; }
+  # A read on an adopter's main checkout, never a run's copy; `rev-parse` runs no hook or fsmonitor.
   out="$(git -C "$root" rev-parse --show-toplevel 2>&1)"
   rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -1541,11 +1789,10 @@ footprint_grade() {
 }
 
 # Live runs at a foreign root: records whose `status` is `running` AND whose pid
-# answers `kill -0`. THE STATUS FILTER IS THIS REPORT'S OWN. running_count tests
-# only the pid, which is sound locally because reconcile_stale_runs demotes a
-# dead `running` record first on every pass — but no reconcile pass ever runs
-# against a foreign root, so a bare pid walk there would count a `parked`,
-# `paused` or `failed` record whose pid happens to be live. `doctor` applies the
+# answers `kill -0`. running_count applies the same status filter, and this
+# report needs it for a further reason: no reconcile pass ever runs against a
+# foreign root, so a bare pid walk there would count a `parked`, `paused` or
+# `failed` record whose pid happens to be live. `doctor` applies the
 # same STATUS filter. Its liveness test additionally counts a process this
 # account may not signal (EPERM), which `kill -0` here cannot distinguish from a
 # process that is gone — so on a machine whose daemons run under more than one
@@ -1651,7 +1898,12 @@ print_status() {
   ' "$REGISTRY"
   # The resolved tunables, names and values only — the override channel made
   # observable. Nothing else the override file may have set is printed.
-  echo "tunables: MAX_PARALLEL_RUNS=$MAX_PARALLEL_RUNS POLL_INTERVAL_SECS=$POLL_INTERVAL_SECS PERMISSION_MODE=$PERMISSION_MODE CLEANUP_INTERVAL_SECS=$CLEANUP_INTERVAL_SECS AUTO_TAIL_TERMINAL=$AUTO_TAIL_TERMINAL STALL_CHECK_ENABLED=$STALL_CHECK_ENABLED STALL_WARN_SECS=$STALL_WARN_SECS STALL_KILL_SECS=$STALL_KILL_SECS STALL_MAX_RESTARTS=$STALL_MAX_RESTARTS STALL_BUSY_CPU_PCT=$STALL_BUSY_CPU_PCT PARK_LOOP_MAX_CYCLES=$PARK_LOOP_MAX_CYCLES PARK_LOOP_WINDOW_SECS=$PARK_LOOP_WINDOW_SECS USAGE_CHECK_ENABLED=$USAGE_CHECK_ENABLED USAGE_CHECK_INTERVAL_SECS=$USAGE_CHECK_INTERVAL_SECS USAGE_PAUSE_TRIGGER=$USAGE_PAUSE_TRIGGER USAGE_WARNING_DEBOUNCE=$USAGE_WARNING_DEBOUNCE USAGE_RESUME_MARGIN_SECS=$USAGE_RESUME_MARGIN_SECS USAGE_SEVEN_DAY_PAUSE_PCT=$USAGE_SEVEN_DAY_PAUSE_PCT USAGE_LANE_STATE_ENABLED=$USAGE_LANE_STATE_ENABLED USAGE_LANE_LOCK_ENABLED=$USAGE_LANE_LOCK_ENABLED REMOTE_CONTROL_POLL_SECS=$REMOTE_CONTROL_POLL_SECS REMOTE_WAIT_MAX_SECS=$REMOTE_WAIT_MAX_SECS REMOTE_AUTO_RESUME_MAX=$REMOTE_AUTO_RESUME_MAX REMOTE_AUTO_RESUME_DELAY_SECS=$REMOTE_AUTO_RESUME_DELAY_SECS"
+  echo "tunables: MAX_PARALLEL_RUNS=$MAX_PARALLEL_RUNS POLL_INTERVAL_SECS=$POLL_INTERVAL_SECS PERMISSION_MODE=$PERMISSION_MODE CLEANUP_INTERVAL_SECS=$CLEANUP_INTERVAL_SECS AUTO_TAIL_TERMINAL=$AUTO_TAIL_TERMINAL STALL_CHECK_ENABLED=$STALL_CHECK_ENABLED STALL_WARN_SECS=$STALL_WARN_SECS STALL_KILL_SECS=$STALL_KILL_SECS STALL_MAX_RESTARTS=$STALL_MAX_RESTARTS STALL_BUSY_CPU_PCT=$STALL_BUSY_CPU_PCT PARK_LOOP_MAX_CYCLES=$PARK_LOOP_MAX_CYCLES PARK_LOOP_WINDOW_SECS=$PARK_LOOP_WINDOW_SECS USAGE_CHECK_ENABLED=$USAGE_CHECK_ENABLED USAGE_CHECK_INTERVAL_SECS=$USAGE_CHECK_INTERVAL_SECS USAGE_PAUSE_TRIGGER=$USAGE_PAUSE_TRIGGER USAGE_WARNING_DEBOUNCE=$USAGE_WARNING_DEBOUNCE USAGE_RESUME_MARGIN_SECS=$USAGE_RESUME_MARGIN_SECS USAGE_SEVEN_DAY_PAUSE_PCT=$USAGE_SEVEN_DAY_PAUSE_PCT USAGE_LANE_STATE_ENABLED=$USAGE_LANE_STATE_ENABLED USAGE_LANE_LOCK_ENABLED=$USAGE_LANE_LOCK_ENABLED REMOTE_CONTROL_POLL_SECS=$REMOTE_CONTROL_POLL_SECS REMOTE_WAIT_MAX_SECS=$REMOTE_WAIT_MAX_SECS REMOTE_AUTO_RESUME_MAX=$REMOTE_AUTO_RESUME_MAX REMOTE_AUTO_RESUME_DELAY_SECS=$REMOTE_AUTO_RESUME_DELAY_SECS STALL_WAKE_GAP_SECS=$STALL_WAKE_GAP_SECS KEEP_AWAKE=$KEEP_AWAKE_MODE"
+  if [ "$KEEP_AWAKE_MODE" = "off" ]; then
+    echo "keep-awake: $KEEP_AWAKE_MODE — $KEEP_AWAKE_REASON"
+  else
+    echo "keep-awake: $KEEP_AWAKE_MODE"
+  fi
   # Advisory tail: the other repositories armed on this machine. It decides
   # nothing — see the block above print_status.
   machine_footprint_report
@@ -1666,21 +1918,24 @@ kill_switch_active() {
 
 # The configured `stateDir` of ONE working copy, as a repo-relative name with no
 # trailing slash — the prefix every artifact path a run reads or writes hangs
-# off. It is resolved in the run's OWN working copy, because that is the checkout
-# the engine resolves its paths in and a branch may legitimately carry a
-# different `harness.config.json` than the main one; the main checkout answers
-# when that copy's configuration cannot be read, so a launch does not turn on a
-# transient. Returns 1, printing nothing, when neither answers — and every caller
-# has a closed outcome for that.
+# off. The MAIN checkout's value is the answer: the watcher writes into that
+# directory of the copy unsandboxed, so the name must not be one the run chose.
+# The copy's own configuration is still read, because the engine resolves its
+# paths from it: when it names a different `stateDir`, this returns 1, since an
+# artifact placed where the engine does not look reads to it as an empty task.
+# A copy whose configuration cannot be read takes the main checkout's, so a
+# launch does not turn on a transient. Returns 1, printing nothing, when the
+# main checkout's cannot be read either — and every caller has a closed outcome
+# for that. The copy is read first so the library's one-root cache ends on the
+# main checkout.
 run_state_dir() {
-  local root="${1:-}" name=""
+  local root="${1:-}" name="" own=""
   if [ -n "$root" ]; then
-    name="$(hr_state_dir "$root")" || name=""
+    own="$(hr_state_dir "$root")" || own=""
   fi
-  if [ -z "$name" ]; then
-    name="$(hr_state_dir "$MAIN_REPO")" || name=""
-  fi
+  name="$(hr_state_dir "$MAIN_REPO")" || name=""
   [ -n "$name" ] || return 1
+  [ -z "$own" ] || [ "$own" = "$name" ] || return 1
   printf '%s\n' "$name"
 }
 
@@ -1801,17 +2056,456 @@ lane_release_if_idle() {
 }
 
 # -----------------------------------------------------------------------------
+# THE PER-RUN PROFILE. Outside job mode a session is never handed the base
+# profile ($SETTINGS_PROFILE): every spawn renders a per-run copy carrying that
+# run's own exact write-protection entries, checks it, and passes it as the one
+# `--settings` file. In job mode the base is checked and passed unchanged (JOB
+# MODE in the header). The base's glob entries cannot be relied on for the run's
+# own copy (Linux may skip a `*` denyWrite entry), and the base carries no entry
+# for another live worktree's `.git` pointer, which its sibling-glob Edit /
+# Write allow would otherwise reach.
+# -----------------------------------------------------------------------------
+
+# A declared mirror of cli/src/generators/writeProtection.ts → COPY_GIT_PATHS:
+# each row's run-copy-relative path and kind, in order, held equal by
+# cli/test/watcher-run-profile.test.mjs. A change to that table is an edit here
+# in the same change.
+RUN_PROFILE_COPY_GIT_PATHS='.git/config file
+.git/hooks directory
+.git/objects/info/alternates file
+.git/commondir entry
+.git/config.worktree entry
+.git/objects/info/http-alternates entry'
+
+# Declared mirrors of cli/src/generators/sandboxProfile.ts, held equal by
+# cli/test/watcher-run-profile.test.mjs; a change to either owner is an edit
+# here in the same change:
+#   * RUN_PROFILE_OPT_OUT_MARKER — SANDBOX_OPT_OUT_MARKER;
+#   * RUN_PROFILE_SANDBOX_STRICT — shippedSandboxSettings()' values for
+#     sandbox.enabled, sandbox.failIfUnavailable, sandbox.allowUnsandboxedCommands;
+#   * RUN_PROFILE_SANDBOX_OPT_OUT — the shape applySandbox's opt-out branch
+#     writes: enabled and failIfUnavailable false, allowUnsandboxedCommands left
+#     at the shipped value.
+RUN_PROFILE_OPT_OUT_MARKER="THE SANDBOX IS OFF BY THIS REPOSITORY'S OWN CHOICE"
+RUN_PROFILE_SANDBOX_STRICT='{"sandbox.enabled":true,"sandbox.failIfUnavailable":true,"sandbox.allowUnsandboxedCommands":false}'
+RUN_PROFILE_SANDBOX_OPT_OUT='{"sandbox.enabled":false,"sandbox.failIfUnavailable":false,"sandbox.allowUnsandboxedCommands":false}'
+
+# Set by run_profile_render and run_profile_check; read by spawn_engine.
+RUN_PROFILE_FILE=""
+RUN_PROFILE_REFUSAL=""
+
+# run_profile_wrapper_prefixes <copy> — set RUN_PROFILE_MAIN_PREFIX to
+# `Bash(bash <MAIN_REPO>/<scripts_dir>/` and RUN_PROFILE_COPY_PREFIX to
+# `Bash(bash <copy>/<scripts_dir>/`; 1 when the scripts directory is
+# unresolvable. Call it directly, never inside `$(…)`: it sets globals.
+# The main prefix is a declared mirror of
+# cli/src/generators/permissionProfile.ts → the `{{repoRoot}}` wrapper rows of
+# `WRAPPER_ROW_TOKENS`, `OUTER_LOOP_ROW_TOKENS` and `DEPLOY_ROW_TOKENS`
+# (`Bash(bash <repoRoot>/<scriptsDir>/`, a `.` scripts directory collapsing to
+# the root), held equal by cli/test/watcher-run-profile.test.mjs. A change to
+# that row spelling is an edit here in the same change.
+RUN_PROFILE_MAIN_PREFIX=""
+RUN_PROFILE_COPY_PREFIX=""
+run_profile_wrapper_prefixes() {
+  local copy="${1%/}" scripts
+  RUN_PROFILE_MAIN_PREFIX=""
+  RUN_PROFILE_COPY_PREFIX=""
+  scripts="$(hr_scripts_dir "$MAIN_REPO")" || return 1
+  while [ "${scripts#./}" != "$scripts" ]; do scripts="${scripts#./}"; done
+  case "$scripts" in
+    . | '') scripts="" ;;
+    *) scripts="${scripts}/" ;;
+  esac
+  RUN_PROFILE_MAIN_PREFIX="Bash(bash ${MAIN_REPO%/}/${scripts}"
+  RUN_PROFILE_COPY_PREFIX="Bash(bash ${copy}/${scripts}"
+}
+
+# 0 when <file> parses as exactly one JSON document, and that an object.
+run_profile_one_object() {
+  [ "$(jq -s 'length == 1 and (.[0] | type) == "object"' "$1" 2>/dev/null)" = "true" ]
+}
+
+# run_profile_entries <copy> <kind> — print one `<absolute path><TAB><kind>`
+# line per entry the per-run profile adds for the run copy <copy> of <kind>
+# (`clone` or `worktree`), kind being `file`, `directory` or `entry` as
+# writeProtection.ts → ProtectedKind means them:
+#   * each `hr_run_protected_rel_paths` line re-rooted at <copy>, as `entry`;
+#   * on a clone, each RUN_PROFILE_COPY_GIT_PATHS row re-rooted at <copy>;
+#   * on a legacy worktree, <copy>/.git as `file`;
+#   * the `.git` pointer of every other linked worktree the main checkout
+#     lists, as `file`.
+# Never called in job mode. Every path is exact: this watcher's own rule, not
+# the generator's refused set, refuses a path carrying a quote, a `*` or a tab —
+# a `*` would turn an exact entry into a glob, a quote does not belong in a
+# path this watcher emits, and a tab is the separator — and a <copy> carrying
+# `$`, a backquote, `&`, `;`, `|`, `<`, `>` or a newline: a declared mirror of
+# cli/src/generators/profileEntries.ts → FORBIDDEN_IN_ENTRY's command rows
+# (every row but `///`; the loop above covers the quotes), which the copy's
+# wrapper twins would otherwise carry. Exit 1 the protected set
+# is unreadable, 2 the worktree list failed, 3 a path was refused, 4 <kind> is
+# neither kind; nothing useful is printed on a non-zero exit.
+run_profile_entries() {
+  local copy="${1%/}" kind="${2-}" rel p k list line first=1 out=""
+  case "$kind" in clone | worktree) ;; *) return 4 ;; esac
+  list="$(hr_run_protected_rel_paths "$MAIN_REPO")" || return 1
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    out="${out}${copy}/${rel}	entry
+"
+  done <<EOF
+$list
+EOF
+  if [ "$kind" = clone ]; then
+    while IFS=' ' read -r p k; do
+      [ -n "$p" ] || continue
+      out="${out}${copy}/${p}	${k}
+"
+    done <<EOF
+$RUN_PROFILE_COPY_GIT_PATHS
+EOF
+  else
+    out="${out}${copy}/.git	file
+"
+  fi
+  list="$(git -C "$MAIN_REPO" worktree list --porcelain 2>/dev/null)" || return 2
+  while IFS= read -r line; do
+    case "$line" in
+      'worktree '*) ;;
+      *) continue ;;
+    esac
+    # The first worktree git lists is the main checkout.
+    if [ "$first" = 1 ]; then
+      first=0
+      continue
+    fi
+    p="${line#worktree }"
+    [ "${p%/}" = "$copy" ] && continue
+    out="${out}${p%/}/.git	file
+"
+  done <<EOF
+$list
+EOF
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    p="${line%	*}"
+    case "$p" in
+      *\"* | *\'* | *\** | *'	'*) return 3 ;;
+    esac
+  done <<EOF
+$out
+EOF
+  case "$copy" in
+    *'$'* | *'`'* | *'&'* | *';'* | *'|'* | *'<'* | *'>'* | *$'\n'*) return 3 ;;
+  esac
+  printf '%s' "$out"
+}
+
+# run_profile_render <branch> <copy> <kind> — write the per-run profile for
+# <branch> to the path `hr_run_profile_file "$HARNESS_REPO_SLUG" <branch>`
+# prints, through a temporary file in its directory and `mv`, the directory
+# created at mode 700, and set RUN_PROFILE_FILE to it. The content is
+# $SETTINGS_PROFILE with each run_profile_entries path appended to
+# `.sandbox.filesystem.denyWrite` and its Edit rules to `.permissions.deny`,
+# and the run copy's twins of the base's main-checkout wrapper rules appended
+# to `.permissions.allow` and `.permissions.ask`: each base entry of that list
+# starting with RUN_PROFILE_MAIN_PREFIX, that prefix replaced by
+# RUN_PROFILE_COPY_PREFIX (run_profile_wrapper_prefixes), in base order. The
+# `ask` twins keep a run copy's deploy wrapper asked about. Every append is
+# made only when absent. Re-rendered
+# at every spawn, so a resume gets one derived from the current base. Call it
+# directly, never inside `$(…)`: it sets globals. 1 with RUN_PROFILE_REFUSAL set
+# on any failed step, an unanchorable lane directory included.
+#
+# The kind → rule map in `rules` is a declared mirror of
+# cli/src/generators/writeProtection.ts → fileToolDenyRules, held equal by
+# cli/test/watcher-run-profile.test.mjs: `file` → Edit(/<p>); `directory` →
+# Edit(/<p>/**); `entry` → Edit(/<p>), Edit(/<p>/**). A change to that map is
+# an edit here in the same change.
+run_profile_render() {
+  local branch="$1" copy="$2" kind="$3" file dir tmp entries rc=0
+  RUN_PROFILE_FILE=""
+  RUN_PROFILE_REFUSAL=""
+  if ! file="$(hr_run_profile_file "$HARNESS_REPO_SLUG" "$branch")"; then
+    RUN_PROFILE_REFUSAL="the per-run profile has no path: the repository slug or the machine-local state directory is unresolvable"
+    return 1
+  fi
+  entries="$(run_profile_entries "$copy" "$kind")" || rc=$?
+  case "$rc" in
+    0) ;;
+    1) RUN_PROFILE_REFUSAL="the run copy's protected paths could not be read from harness.config.json"; return 1 ;;
+    2) RUN_PROFILE_REFUSAL="git worktree list failed in $MAIN_REPO"; return 1 ;;
+    3) RUN_PROFILE_REFUSAL="a per-run profile entry carries a quote, a '*' or a tab, or the run copy's path carries a '\$', a backquote, '&', ';', '|', '<', '>' or a newline"; return 1 ;;
+    *) RUN_PROFILE_REFUSAL="the run copy's kind '$kind' is neither clone nor worktree"; return 1 ;;
+  esac
+  if ! run_profile_one_object "$SETTINGS_PROFILE"; then
+    RUN_PROFILE_REFUSAL="the base profile $SETTINGS_PROFILE is not exactly one JSON object"
+    return 1
+  fi
+  if ! run_profile_wrapper_prefixes "$copy"; then
+    RUN_PROFILE_REFUSAL="the scripts directory could not be read from harness.config.json"
+    return 1
+  fi
+  dir="${file%/*}"
+  if ! (umask 077 && mkdir -p "$dir") 2>/dev/null || ! chmod 700 "$dir" 2>/dev/null; then
+    RUN_PROFILE_REFUSAL="cannot create $dir"
+    return 1
+  fi
+  if ! tmp="$(mktemp "$dir/.render.XXXXXX" 2>/dev/null)"; then
+    RUN_PROFILE_REFUSAL="cannot create a temporary file in $dir"
+    return 1
+  fi
+  if ! printf '%s' "$entries" |
+    jq -R -s --slurpfile base "$SETTINGS_PROFILE" \
+      --arg main "$RUN_PROFILE_MAIN_PREFIX" --arg twin "$RUN_PROFILE_COPY_PREFIX" '
+      def rules:
+        if .kind == "entry" then ["Edit(/" + .path + ")", "Edit(/" + .path + "/**)"]
+        elif .kind == "directory" then ["Edit(/" + .path + "/**)"]
+        else ["Edit(/" + .path + ")"]
+        end;
+      def add_absent($xs): reduce $xs[] as $x (.; if any(.[]; . == $x) then . else . + [$x] end);
+      def add_twins: add_absent([.[] | select(type == "string" and startswith($main)) | $twin + .[($main | length):]]);
+      [split("\n")[] | select(length > 0) | split("\t") | {path: .[0], kind: .[1]}] as $e
+      | $base[0]
+      | .sandbox.filesystem.denyWrite |= add_absent([$e[].path])
+      | .permissions.deny |= add_absent([$e[] | rules[]])
+      | if (.permissions.allow | type) == "array" then .permissions.allow |= add_twins else . end
+      | if (.permissions.ask | type) == "array" then .permissions.ask |= add_twins else . end
+    ' >"$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    RUN_PROFILE_REFUSAL="could not render the per-run profile from $SETTINGS_PROFILE"
+    return 1
+  fi
+  if ! mv -f "$tmp" "$file" 2>/dev/null; then
+    rm -f "$tmp"
+    RUN_PROFILE_REFUSAL="cannot write $file"
+    return 1
+  fi
+  RUN_PROFILE_FILE="$file"
+  return 0
+}
+
+# run_profile_check <file> [<copy>] — 0 when <file> may be passed to
+# `--settings`; 1 with RUN_PROFILE_REFUSAL set to one sentence when:
+#   * $SETTINGS_PROFILE or <file> is not exactly one JSON object;
+#   * the sandbox clause fails: with no `_README` line beginning with
+#     RUN_PROFILE_OPT_OUT_MARKER the three keys must equal
+#     RUN_PROFILE_SANDBOX_STRICT, with one they must equal
+#     RUN_PROFILE_SANDBOX_OPT_OUT (both declared mirrors, above). An empty
+#     `--settings` file starts an unsandboxed session with no error
+#     (docs/sandbox-verification.md §6);
+#   * removing exactly the entries <file> appends to
+#     `.sandbox.filesystem.denyWrite`, `.permissions.deny`,
+#     `.permissions.allow` and `.permissions.ask` does not give back
+#     $SETTINGS_PROFILE, compared as JSON;
+#   * an entry appended to `.sandbox.filesystem.denyWrite` or
+#     `.permissions.deny` is not a string;
+#   * an entry appended to `.permissions.allow` or `.permissions.ask` is not
+#     the <copy> twin, as run_profile_render makes it, of a base entry of the
+#     same list. With no <copy> every such append is refused.
+# A settings file failing Claude Code's validation is silently ignored under
+# `-p`, so this reduces the per-run copy's validity to the base's, which
+# `doctor` grades. In job mode <file> is $SETTINGS_PROFILE, no <copy> is
+# passed, and the appended set is empty.
+run_profile_check() {
+  local file="$1" copy="${2-}" verdict main="" twin=""
+  RUN_PROFILE_REFUSAL=""
+  if ! run_profile_one_object "$SETTINGS_PROFILE"; then
+    RUN_PROFILE_REFUSAL="the base profile $SETTINGS_PROFILE is not exactly one JSON object"
+    return 1
+  fi
+  if ! run_profile_one_object "$file"; then
+    RUN_PROFILE_REFUSAL="the per-run profile $file is not exactly one JSON object"
+    return 1
+  fi
+  if [ -n "$copy" ]; then
+    if ! run_profile_wrapper_prefixes "$copy"; then
+      RUN_PROFILE_REFUSAL="the scripts directory could not be read from harness.config.json"
+      return 1
+    fi
+    main="$RUN_PROFILE_MAIN_PREFIX"
+    twin="$RUN_PROFILE_COPY_PREFIX"
+  fi
+  verdict="$(jq -n -r --slurpfile b "$SETTINGS_PROFILE" --slurpfile f "$file" \
+    --arg main "$main" --arg twin "$twin" \
+    --arg marker "$RUN_PROFILE_OPT_OUT_MARKER" \
+    --argjson strict "$RUN_PROFILE_SANDBOX_STRICT" \
+    --argjson optout "$RUN_PROFILE_SANDBOX_OPT_OUT" '
+      $b[0] as $B | $f[0] as $F
+      | def delta(p):
+          ($B | getpath(p)) as $bv | ($F | getpath(p)) as $fv
+          | if $bv == $fv then {ok: true, extra: []}
+            elif ($bv | type) == "array" and ($fv | type) == "array"
+              and ($fv | length) >= ($bv | length) and $fv[0:($bv | length)] == $bv
+            then {ok: true, extra: $fv[($bv | length):]}
+            else {ok: false, extra: []}
+            end;
+        def restore(p): if (getpath(p) == ($B | getpath(p))) then . else setpath(p; $B | getpath(p)) end;
+        def twins(p):
+          if $main == "" then []
+          else [($B | getpath(p)) | .[]? | select(type == "string" and startswith($main)) | $twin + .[($main | length):]]
+          end;
+        def twinned(p; d): twins(p) as $t | all(d.extra[]; . as $x | any($t[]; . == $x));
+        (any(($F._README // [])[]?; type == "string" and startswith($marker))) as $optedout
+        | (if $optedout then $optout else $strict end) as $want
+        | ["sandbox", "filesystem", "denyWrite"] as $dw
+        | ["permissions", "deny"] as $pd
+        | ["permissions", "allow"] as $pa
+        | ["permissions", "ask"] as $pk
+        | delta($dw) as $d1 | delta($pd) as $d2 | delta($pa) as $d3 | delta($pk) as $d4
+        | if ($want | to_entries | all(.[]; . as $e | ($F | getpath($e.key | split("."))) == $e.value)) | not
+          then (if $optedout then "optout" else "strict" end)
+          elif ($d1.ok and $d2.ok and $d3.ok and $d4.ok) | not then "delta"
+          elif ($F | restore($dw) | restore($pd) | restore($pa) | restore($pk)) != $B then "delta"
+          elif any(($d1.extra + $d2.extra)[]; type != "string") then "nonstring"
+          elif (twinned($pa; $d3) and twinned($pk; $d4)) | not then "twin"
+          else "ok"
+          end
+    ' 2>/dev/null)" || verdict=""
+  case "$verdict" in
+    ok) return 0 ;;
+    strict) RUN_PROFILE_REFUSAL="$file does not carry sandbox.enabled true, sandbox.failIfUnavailable true and sandbox.allowUnsandboxedCommands false, and names no sandbox opt-out" ;;
+    optout) RUN_PROFILE_REFUSAL="$file names the sandbox opt-out but does not carry its shape: sandbox.enabled false, sandbox.failIfUnavailable false, sandbox.allowUnsandboxedCommands false" ;;
+    delta) RUN_PROFILE_REFUSAL="$file differs from the base profile $SETTINGS_PROFILE by more than entries appended to sandbox.filesystem.denyWrite, permissions.deny, permissions.allow and permissions.ask" ;;
+    nonstring) RUN_PROFILE_REFUSAL="$file appends an entry that is not a string" ;;
+    twin) RUN_PROFILE_REFUSAL="$file appends a permissions.allow or permissions.ask entry that is not the run copy's twin of a base wrapper rule" ;;
+    *) RUN_PROFILE_REFUSAL="$file could not be checked against the base profile $SETTINGS_PROFILE" ;;
+  esac
+  return 1
+}
+
+# spawn_engine's pre-launch refusal: SPAWN_REFUSAL holds the reason, which the
+# caller's spawn_refused reads. Both run in the caller's shell, never `$(…)`.
+SPAWN_REFUSAL=""
+spawn_refuse() {
+  SPAWN_REFUSAL="$2"
+  log "not launching '$1': $2"
+}
+
+# spawn_refused <branch> <log_path> — what every caller of spawn_engine does
+# when it returns 1: the record goes to `failed`, with one `failed`
+# notification naming the reason, and no pid stays attached.
+spawn_refused() {
+  registry_set "$1" status failed pid ""
+  notify failed "$1" "$2" "not launched: ${SPAWN_REFUSAL:-the launch was refused}"
+}
+
+# -----------------------------------------------------------------------------
+# KEEP AWAKE, watcher side. The header's KEEP AWAKE block states what holds on
+# each host, why the hold cannot outlive the run, and why the per-pass check
+# runs under the kill switch. The library's hr_keep_awake_* functions decide and
+# start; every log line and registry write is here.
+# -----------------------------------------------------------------------------
+
+# keep_awake_start <branch> <engine_pid> — called from INSIDE the launch pipe's
+# head, just before it `exec`s into the engine. ITS CALLER MUST SEND ITS STDOUT
+# TO /dev/null: `log` tees to stdout, and inside the head stdout is the stream
+# pipe, so one stray line would corrupt `<branch>.stream.jsonl`. Job mode writes
+# nothing: a runner does not sleep, and those fields are local-only.
+keep_awake_start() {
+  local branch="$1" engine_pid="$2" tool="caffeinate"
+  [ "$JOB_MODE" != "1" ] || return 0
+  if [ "$KEEP_AWAKE_MODE" = "off" ]; then
+    registry_set "$branch" engine_pid "$engine_pid" keep_awake off keep_awake_pid ""
+    [ "$KEEP_AWAKE_QUIET" = "1" ] || log "keep-awake: not holding for '$branch' — $KEEP_AWAKE_REASON"
+    return 0
+  fi
+  hr_keep_awake_hold_var "$KEEP_AWAKE_MODE" "$engine_pid" "$branch" || :
+  registry_set "$branch" engine_pid "$engine_pid" \
+    keep_awake "$HR_KEEP_AWAKE_STATE" keep_awake_pid "$HR_KEEP_AWAKE_PID"
+  [ "$KEEP_AWAKE_MODE" != "logind" ] || tool="systemd-inhibit"
+  case "$HR_KEEP_AWAKE_STATE" in
+    held) log "keep-awake: holding the host awake for '$branch' ($tool pid $HR_KEEP_AWAKE_PID, engine pid $engine_pid)" ;;
+    battery) log "keep-awake: '$branch' launched on battery — no hold until mains power returns" ;;
+    *) log "keep-awake: not holding for '$branch' — $HR_KEEP_AWAKE_DETAIL" ;;
+  esac
+}
+
+# keep_awake_retake <branch> <engine_pid> <mode> — the hold taken again by the
+# pass below: on `logind` once mains power is back, and on either mode once the
+# mode holds again after a release to `off`.
+keep_awake_retake() {
+  local b="$1" epid="$2" mode="$3" tool="caffeinate"
+  [ "$mode" != "logind" ] || tool="systemd-inhibit"
+  hr_keep_awake_hold_var "$mode" "$epid" "$b" || :
+  registry_set "$b" keep_awake "$HR_KEEP_AWAKE_STATE" keep_awake_pid "$HR_KEEP_AWAKE_PID"
+  if [ "$HR_KEEP_AWAKE_STATE" = "held" ] && [ "$mode" = "logind" ]; then
+    log "keep-awake: mains power — holding the host awake for '$b' again ($tool pid $HR_KEEP_AWAKE_PID)"
+  elif [ "$HR_KEEP_AWAKE_STATE" = "held" ]; then
+    log "keep-awake: holding the host awake for '$b' again ($tool pid $HR_KEEP_AWAKE_PID)"
+  else
+    log "keep-awake: not holding for '$b' — $HR_KEEP_AWAKE_DETAIL"
+  fi
+}
+
+# One pass over the local `running` records whose engine is alive: release every
+# hold when the mode is `off`, take it again on a record released to `off` once
+# the mode holds, and on `logind` follow mains power. `caffeinate` needs nothing
+# more, because `-s` already lapses on battery. `refused` and `failed`
+# are never retried, so no automatic retry here is unbounded. It only reads
+# records and signals holders, and a record with a dead engine is skipped — its
+# holder has exited by its own `-w` or waiter — so running ahead of
+# reconcile_stale_runs touches nothing that pass heals.
+keep_awake_pass() {
+  local b epid state hpid
+  while IFS= read -r b; do
+    [ -n "$b" ] || continue
+    record_is_remote "$b" && continue
+    [ "$(registry_get "$b" status)" = "running" ] || continue
+    epid="$(registry_get "$b" engine_pid)"
+    { [ -n "$epid" ] && kill -0 "$epid" 2>/dev/null; } || continue
+    state="$(registry_get "$b" keep_awake)"
+    hpid="$(registry_get "$b" keep_awake_pid)"
+    case "$KEEP_AWAKE_MODE" in
+      off)
+        if [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null; then
+          kill "$hpid" 2>/dev/null || :
+          registry_set "$b" keep_awake off keep_awake_pid ""
+          log "keep-awake: released '$b' — $KEEP_AWAKE_REASON"
+        fi
+        ;;
+      caffeinate)
+        if [ "$state" = "off" ] && ! { [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null; }; then
+          keep_awake_retake "$b" "$epid" caffeinate
+        fi
+        ;;
+      logind)
+        if [ "$state" = "held" ] && [ -n "$hpid" ] && kill -0 "$hpid" 2>/dev/null; then
+          hr_on_mains_power && continue
+          kill "$hpid" 2>/dev/null || :
+          # The power state is read again after the release: power that came
+          # back in between must not leave the run unheld until the next pass.
+          if hr_on_mains_power; then
+            keep_awake_retake "$b" "$epid" logind
+          else
+            registry_set "$b" keep_awake battery keep_awake_pid ""
+            log "keep-awake: on battery — released the hold for '$b'"
+          fi
+        elif { [ "$state" = "held" ] || [ "$state" = "battery" ] || [ "$state" = "off" ]; } && hr_on_mains_power; then
+          keep_awake_retake "$b" "$epid" logind
+        elif [ "$state" = "off" ]; then
+          registry_set "$b" keep_awake battery keep_awake_pid ""
+          log "keep-awake: on battery — no hold for '$b' until mains power returns"
+        fi
+        ;;
+    esac
+  done <<EOF
+$(registry_branches)
+EOF
+}
+
+# -----------------------------------------------------------------------------
 # Headless launch. It DELIMITS THE UNTRUSTED PROMPT CONTENT: the launch prompt
 # references the dropped artifact's FILE PATH for the engine to read — it never
 # concatenates that artifact's text into the trusted instruction layer. The
 # engine command resolves its own worktree-relative anchors; this function only
-# points it at the right checkout (`--add-dir` the worktree) and hands it the
-# generated permission profile.
+# points it at the right checkout (`--add-dir` the worktree) and hands it a
+# checked permission profile.
 #
 # The flag string, in full:
 #
+#   HARNESS_MAIN_REPO=<MAIN_REPO>
 #   <agent cli> -p "<trusted instruction naming the artifact's FILE PATH>" \
-#     --settings <MAIN_REPO>/.claude/settings.autonomous.json \
+#     --settings <per-run copy> \
 #     --permission-mode "$PERMISSION_MODE" \
 #     --model "<agentModel>" \
 #     --effort "<agentEffort>" \
@@ -1820,8 +2514,21 @@ lane_release_if_idle() {
 #     --add-dir <MAIN_REPO>/<state_dir> \
 #     [--add-dir <dir> ...]
 #
+# `<per-run copy>` is `hr_run_profile_file`'s path,
+# `${XDG_STATE_HOME:-$HOME/.local/state}/autonomous-sdlc-harness/run-profiles/<repo slug>/<sanitized branch>.json`,
+# re-rendered at every launch and resume. It sits under the machine lane
+# directory, outside the run copy, the state directory and every other root the
+# profile lets a session write, so the session cannot rewrite its own
+# protection. In job mode it is <MAIN_REPO>/.claude/settings.autonomous.json,
+# the base, unchanged. Either file is checked first (run_profile_check), and
+# the launch is refused when the check fails: Claude Code takes one
+# `--settings` file, and silently ignores one that fails its validation.
+# The environment line is exported inside spawn_engine's subshell, so the engine
+# and every command it runs inherit it. The plugin's readers read it with a bare
+# `printenv HARNESS_MAIN_REPO`; no outer-loop script reads it, because an
+# assignment prefix on an excluded call could set it.
 # where the bracketed tail is JOB MODE ONLY: one --add-dir per
-# permissions.additionalDirectories entry of the profile, in file order, minus
+# permissions.additionalDirectories entry of the base profile, in file order, minus
 # empty entries and the two directories above; outside job mode the line ends at
 # the state directory. See spawn_engine for why the profile's list is repeated.
 # And NEVER a permission-bypass flag: the profile's deny floor is what keeps an
@@ -1846,6 +2553,7 @@ lane_release_if_idle() {
 # about fresh versus resume.
 spawn_engine() {
   local branch="$1" worktree="$2" log_path="$3" resume_indexes="${4:-}" pause_resume="${5:-}"
+  SPAWN_REFUSAL=""
 
   # Every artifact path named in the prompts below is `<state_dir>/…` INSIDE the
   # run's own working copy, so the name is resolved there. Unresolvable is the
@@ -1853,7 +2561,7 @@ spawn_engine() {
   # nobody wrote, and it would look like an empty task rather than an error.
   local state_rel
   state_rel="$(run_state_dir "$worktree")" || {
-    log "not launching '$branch': the state directory in '$worktree' is unresolvable"
+    spawn_refuse "$branch" "the state directory in '$worktree' is unresolvable"
     return 1
   }
   # The main checkout's state tree, granted to the run as well: it holds the
@@ -1861,9 +2569,31 @@ spawn_engine() {
   # additionalDirectories entry (belt and braces if the two ever diverge).
   local main_state
   main_state="$(hr_state_path "$MAIN_REPO")" || {
-    log "not launching '$branch': the state directory under '$MAIN_REPO' is unresolvable"
+    spawn_refuse "$branch" "the state directory under '$MAIN_REPO' is unresolvable"
     return 1
   }
+
+  # The one `--settings` file (THE PER-RUN PROFILE, above). Job mode never
+  # reaches hr_run_profile_file or run_profile_render, so nothing is written
+  # under the machine lane there.
+  local settings_file copy_kind
+  if [ "$JOB_MODE" = "1" ]; then
+    settings_file="$SETTINGS_PROFILE"
+  else
+    copy_kind="$(registry_get "$branch" copy_kind)"
+    [ -n "$copy_kind" ] || copy_kind="worktree"
+    if ! run_profile_render "$branch" "$worktree" "$copy_kind"; then
+      spawn_refuse "$branch" "$RUN_PROFILE_REFUSAL"
+      return 1
+    fi
+    settings_file="$RUN_PROFILE_FILE"
+  fi
+  local check_copy=""
+  [ "$JOB_MODE" = "1" ] || check_copy="$worktree"
+  if ! run_profile_check "$settings_file" "$check_copy"; then
+    spawn_refuse "$branch" "$RUN_PROFILE_REFUSAL"
+    return 1
+  fi
 
   # Trusted instruction layer. It NAMES the artifact's path; it never inlines the
   # untrusted body. The engine reads the file itself.
@@ -1996,8 +2726,8 @@ ${GLOBAL_STOP}. End at 'branch ready for review' — never merge, never push to 
     effort_args=(--effort "$AGENT_EFFORT")
   fi
 
-  # JOB MODE ONLY: every permissions.additionalDirectories entry of the profile
-  # (the plugin roots `init --plugin-root-entries` wrote) also goes on the line as
+  # JOB MODE ONLY: every permissions.additionalDirectories entry of the base
+  # profile, the file job mode passes to --settings (the plugin roots `init --plugin-root-entries` wrote) also goes on the line as
   # an --add-dir, because a job session was refused reads under a root the profile
   # file already granted. `init` stays the one producer of the list. File order;
   # an empty entry and one equal to the two directories already passed are
@@ -2057,10 +2787,13 @@ EOF
   # the only way to enumerate them is through a parent that is still alive.
   (
     cd "$worktree" || exit 97
+    # Set unconditionally, so a value the watcher inherited is overwritten rather
+    # than passed on; inside the subshell, so no other child of the watcher sees it.
+    export HARNESS_MAIN_REPO="$MAIN_REPO"
     # `--add-dir "$worktree"` is NOT redundant with the profile: that file grants
-    # the sibling-worktree glob through Edit/Write/Read rules, not through
+    # the sibling-run-copy glob through Edit/Read rules, not through
     # additionalDirectories. The job-mode extras after the two fixed --add-dir
-    # flags duplicate the profile's additionalDirectories on purpose: a job
+    # flags duplicate the base profile's additionalDirectories on purpose: a job
     # session was refused reads under a directory that file granted, and a
     # launch flag does not depend on how the settings file is merged.
     #
@@ -2073,19 +2806,32 @@ EOF
     # `<log>.stream.jsonl` — the deep-debug copy, and what the usage gate parses
     # for a rate-limit event — and then formatted into the log. rc MUST come from
     # PIPESTATUS[0], NEVER from the end of the pipe, or classify_run_exit would
-    # read the formatter's status instead of the engine's.
-    "$AGENT_CLI" -p "$launch_prompt" \
-      --settings "$SETTINGS_PROFILE" \
-      --permission-mode "$PERMISSION_MODE" \
-      ${model_args[@]+"${model_args[@]}"} \
-      ${effort_args[@]+"${effort_args[@]}"} \
-      --output-format stream-json --verbose \
-      --add-dir "$worktree" \
-      --add-dir "$main_state" \
-      ${extra_dir_args[@]+"${extra_dir_args[@]}"} 2>>"$log_path" |
+    # read the formatter's status instead of the engine's. The head now `exec`s
+    # into the engine, so PIPESTATUS[0] is the engine's own status, and the
+    # `$(exec sh -c …)` pid is the engine's pid, because bash 3.2 has no
+    # per-subshell pid variable. keep_awake_start's stdio is detached because its
+    # stdout here is the stream pipe.
+    {
+      keep_awake_start "$branch" "$(exec sh -c 'echo "$PPID"')" </dev/null >/dev/null 2>&1
+      exec "$AGENT_CLI" -p "$launch_prompt" \
+        --settings "$settings_file" \
+        --permission-mode "$PERMISSION_MODE" \
+        ${model_args[@]+"${model_args[@]}"} \
+        ${effort_args[@]+"${effort_args[@]}"} \
+        --output-format stream-json --verbose \
+        --add-dir "$worktree" \
+        --add-dir "$main_state" \
+        ${extra_dir_args[@]+"${extra_dir_args[@]}"} 2>>"$log_path"
+    } |
       tee -a "${log_path%.log}.stream.jsonl" |
       "$formatter" >>"$log_path"
     rc=${PIPESTATUS[0]}
+    record_run_analytics "$branch" "$worktree" "$log_path"
+    # The record above runs BEFORE the classification so it is on the branch,
+    # and locally on origin, before any notification names the run's outcome —
+    # on a clone, hr_commit_paths_var moves the clone's ref and then the main
+    # checkout's, so classify_run_exit's own sync finds them equal. It can
+    # neither change rc nor notify. Job mode reaches this same line.
     # Classify and notify HERE, where rc is the engine's real exit code.
     classify_run_exit "$branch" "$worktree" "$log_path" "$rc"
   ) &
@@ -2179,7 +2925,10 @@ launch_run() {
   log "launching headless run for '$branch' (engine=$engine_kind) in $worktree (log: $log_path)"
   notify launched "$branch" "$log_path" "engine=$engine_kind"
   open_log_terminal "$branch" "$log_path"
-  spawn_engine "$branch" "$worktree" "$log_path"
+  if ! spawn_engine "$branch" "$worktree" "$log_path"; then
+    spawn_refused "$branch" "$log_path"
+    return 1
+  fi
 }
 
 # launch_remote_run <branch> <worktree> <log_path> <engine_kind>
@@ -2257,6 +3006,86 @@ max_question_index() {
   printf '%s\n' "$max"
 }
 
+# record_run_analytics <branch> <worktree> <log_path>
+#
+# Record the session that just ended: run run-analytics.sh over the run's
+# stream, then commit each file it wrote on the run's branch. Called from INSIDE
+# the spawn_engine subshell, after every session and before classify_run_exit.
+#
+# BEST-EFFORT BY CONTRACT: it ALWAYS returns 0, never reads or writes the
+# caller's rc and never notifies, so it cannot change the classification, the
+# exit code or any notification. Each failure is one `log` line, which lands in
+# the watcher log; the script's, the commits' and the push's own output goes to
+# the run's log.
+#
+# THE PUSH. Locally, once both files are handled and only when at least one was
+# committed, the run's branch is pushed through push-branch.sh — once per call,
+# not once per file. Without it the final session's record would reach origin
+# only with a push nothing makes, because no session follows it. The push is a
+# SEPARATE statement from the commits, as at the task-prompt commit, and the
+# function still returns 0 whatever it does. push-branch.sh exits 0 on every
+# path, failures included, so its exit status says nothing: the push runs
+# through `hr_push_landed` (lib/harness-run-lib.sh), the remote arm's landed
+# test, which reads the answer in the main checkout — `refs/heads/<branch>`
+# equal to `refs/remotes/origin/<branch>`, fetching that ref once when they
+# differ. Any non-zero answer — the push refused or skipped, origin naming no
+# URL, the fetch failing, or origin moved past the branch — is one watcher-log
+# WARNING; the push's and the fetch's own output go to the run's log. That
+# reading holds for a clone and a legacy worktree alike: on a clone the commit
+# has already moved the main checkout's ref with the clone's, so push-branch.sh's
+# sync-in is a no-op, the push runs from the main checkout, and
+# classify_run_exit's sync after it finds the two equal.
+# In a job (JOB_MODE=1) it pushes nothing: the workflow's `Push the branch` step
+# runs under always() after the job's last session and pushes every commit the
+# job made, this one included, so a push here would only repeat it.
+#
+# --main-repo is passed because run-analytics.sh reads no HARNESS_MAIN_REPO
+# (see the header above spawn_engine); it is the same value.
+record_run_analytics() {
+  local branch="$1" worktree="$2" log_path="$3"
+  local state_rel file commit_rc subject a_rc=0 committed=0
+
+  # The watchdog owns this run's teardown, as in classify_run_exit's first test.
+  if [ "$(registry_get "$branch" stall_killing)" = "1" ]; then
+    return 0
+  fi
+  if [ ! -x "$RUN_ANALYTICS" ]; then
+    log "run analytics: '$RUN_ANALYTICS' is not executable — '$branch' not recorded (\`autonomous-sdlc-harness init --force\` rewrites it)"
+    return 0
+  fi
+  if ! state_rel="$(run_state_dir "$worktree")"; then
+    log "run analytics: the state directory in '$worktree' is unresolvable — '$branch' not recorded"
+    return 0
+  fi
+
+  "$RUN_ANALYTICS" "${log_path%.log}.stream.jsonl" "$branch" \
+    --repo "$worktree" --main-repo "$MAIN_REPO" >>"$log_path" 2>&1 || a_rc=$?
+  if [ "$a_rc" -ne 0 ]; then
+    log "run analytics: '$branch' not recorded (exit $a_rc) — see $log_path"
+    return 0
+  fi
+
+  subject="$(run_analytics_subject "$branch")"
+  for file in run-analytics.json run-analytics.md; do
+    [ -f "$worktree/$state_rel/run_analytics/$branch/$file" ] || continue
+    commit_rc=0
+    watcher_commit "$worktree" "$state_rel/run_analytics/$branch/$file" "$subject" >>"$log_path" 2>&1 || commit_rc=$?
+    case "$commit_rc" in
+      0)
+        log "run analytics: committed $file for '$branch' ($subject)"
+        committed=1
+        ;;
+      3) ;;
+      *) log "run analytics: could not commit $file for '$branch' (exit $commit_rc) — see $log_path" ;;
+    esac
+  done
+  if [ "$committed" = 1 ] && [ "$JOB_MODE" != "1" ]; then
+    hr_push_landed "$PUSH_BRANCH" "$worktree" "$branch" >>"$log_path" 2>&1 ||
+      log "WARNING: push-branch.sh did not bring origin/$branch to '$branch' after the run-analytics commit — continuing (see $log_path)"
+  fi
+  return 0
+}
+
 # classify_run_exit <branch> <worktree> <log_path> <rc>
 #
 # Determine the terminal event for an exited run and notify. Called from INSIDE
@@ -2289,6 +3118,17 @@ classify_run_exit() {
   # `failed` or clobber the status that pass just set.
   if [ "$(registry_get "$branch" stall_killing)" = "1" ]; then
     return 0
+  fi
+
+  # Sync a clone's branch into the main checkout, so the main checkout's branch
+  # shows what the run committed. A refusal is one log line and never changes
+  # the classification below.
+  if [ "$(registry_get "$branch" copy_kind)" = "clone" ]; then
+    if [ -z "$RUN_MAIN" ]; then
+      log "classify: could not sync the clone of '$branch' into the main checkout ($RUN_MAIN_REFUSAL) — its branch there may lag the run's commits"
+    elif ! hr_run_copy_check_var "$RUN_MAIN" "$worktree" >>"$log_path" 2>&1; then
+      log "classify: could not sync the clone of '$branch' into the main checkout ($HR_RUN_REFUSAL) — its branch there may lag the run's commits"
+    fi
   fi
 
   local state_rel clar_dir="" pause_ack="" resume_file=""
@@ -2452,7 +3292,7 @@ classify_run_exit() {
       notify parked "$branch" "$log_path" "See $clar_dir"
     fi
   elif [ "$rc" -eq 0 ]; then
-    registry_set "$branch" status completed
+    registry_set "$branch" status completed pid ""
     # Clear the watchdog counters so a reused branch key starts clean.
     registry_set "$branch" stall_restarts 0
     registry_set "$branch" stall_warned ""
@@ -2464,7 +3304,7 @@ classify_run_exit() {
       notify completed "$branch" "$log_path"
     fi
   else
-    registry_set "$branch" status failed
+    registry_set "$branch" status failed pid ""
     registry_set "$branch" park_loop_cycles 0
     log "run '$branch' failed — rc=$rc"
     notify failed "$branch" "$log_path" "(exit $rc)"
@@ -2633,7 +3473,7 @@ resume_parked_run() {
   begin_park_resume "$branch" "$clar_dir" "$answered_set"
   notify resumed "$branch" "$log_path" "answered clarification(s) #$answered_set"
   open_log_terminal "$branch" "$log_path"
-  spawn_engine "$branch" "$worktree" "$log_path" "$answered_set"
+  spawn_engine "$branch" "$worktree" "$log_path" "$answered_set" || spawn_refused "$branch" "$log_path"
   return 0
 }
 
@@ -2794,7 +3634,7 @@ resume_paused_run() {
   begin_pause_resume "$branch" "$state_abs"
   notify resumed "$branch" "$log_path" "after pause"
   open_log_terminal "$branch" "$log_path"
-  spawn_engine "$branch" "$worktree" "$log_path" "" 1
+  spawn_engine "$branch" "$worktree" "$log_path" "" 1 || spawn_refused "$branch" "$log_path"
   return 0
 }
 
@@ -2877,6 +3717,54 @@ stall_human_time() {
   printf '%s\n' "$out"
 }
 
+# The stall watchdog's job-surfaces check, in job mode, before its reset: 0 when
+# the branch's own commits change no job surface; non-zero when they do, when
+# the check fails, when no scratch directory can be made, or when a value it
+# needs is empty. The configuration is read from HARNESS_GITHUB_DEFAULT_COMMIT
+# and the merge base taken with HARNESS_DEFAULT_BRANCH_COMMIT, the configured
+# default branch's commit; harness-run.yml recorded both from the fresh checkout
+# before any session ran, never a ref: the session has been writing MAIN_REPO's
+# `.git/refs` and `packed-refs`, so `refs/remotes/origin/<default>` there could
+# name the session's own tip, which makes the merge base the tip and the check
+# pass. The commit ids sit in this process's environment, which the session
+# cannot change.
+stall_job_surfaces_ok() {
+  local scratch rc=0
+  if [ -z "${HARNESS_CLI_VERSION:-}" ] || [ -z "${HARNESS_GITHUB_DEFAULT_BRANCH:-}" ] ||
+    [ -z "${HARNESS_GITHUB_DEFAULT_COMMIT:-}" ] || [ -z "${HARNESS_DEFAULT_BRANCH_COMMIT:-}" ] || [ -z "$MAIN_REPO" ]; then
+    echo "stall-watchdog: the job-surfaces check needs HARNESS_CLI_VERSION, HARNESS_GITHUB_DEFAULT_BRANCH, HARNESS_GITHUB_DEFAULT_COMMIT, HARNESS_DEFAULT_BRANCH_COMMIT and MAIN_REPO set" >&2
+    return 1
+  fi
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/watcher-job-surfaces.XXXXXX")" || return 1
+  # Never from MAIN_REPO: npm reads a project `.npmrc` there and npx prefers a local
+  # node_modules copy, both of which the session can write. `--cwd` still names the checkout.
+  (cd "$scratch" && npx --yes "autonomous-sdlc-harness@$HARNESS_CLI_VERSION" doctor --cwd "$MAIN_REPO" --job-surfaces="$HARNESS_GITHUB_DEFAULT_BRANCH@$HARNESS_GITHUB_DEFAULT_COMMIT@$HARNESS_DEFAULT_BRANCH_COMMIT") || rc=$?
+  rm -rf "$scratch"
+  return "$rc"
+}
+
+# host_wake_pass — a pass that starts more than POLL_INTERVAL_SECS +
+# STALL_WAKE_GAP_SECS after the one before it reads as a host wake, recorded in
+# `.host_woke_at` for check_stalled_runs. Both state files hold one epoch
+# integer, and anything else reads as absent, so the first pass ever detects
+# nothing.
+host_wake_pass() {
+  local now last="" gap tick_file="$LOGS_DIR/.host_last_tick"
+  now="$(date +%s)"
+  if [ -f "$tick_file" ]; then
+    IFS=$' \t\n' read -r last 2>/dev/null <"$tick_file" || :
+  fi
+  case "$last" in '' | *[!0-9]*) last="" ;; esac
+  if [ -n "$last" ]; then
+    gap=$((now - 10#$last))
+    if [ "$gap" -gt $((POLL_INTERVAL_SECS + STALL_WAKE_GAP_SECS)) ]; then
+      printf '%s\n' "$now" >"$LOGS_DIR/.host_woke_at" 2>/dev/null || :
+      log "host-wake: ${gap}s since the last pass (over POLL_INTERVAL_SECS + STALL_WAKE_GAP_SECS) — the host slept or the watcher was not running; the stall watchdog measures silence from $(stall_human_time "$now")"
+    fi
+  fi
+  printf '%s\n' "$now" >"$tick_file" 2>/dev/null || :
+}
+
 check_stalled_runs() {
   [ "$STALL_CHECK_ENABLED" = "1" ] || return 0
   # Skipped WHOLE while a usage hold is up: the usage gate owns run state for as
@@ -2884,8 +3772,16 @@ check_stalled_runs() {
   # to pause would be two owners writing one record.
   [ -f "$USAGE_HOLD" ] && return 0
 
-  local now b pid log_path stream_path newest m f staleness tree_cpu descendants restarts worktree state_rel why
+  local now b pid log_path stream_path newest m f staleness tree_cpu descendants restarts worktree state_rel why reset_rc note_rel
+  local raw since woke=""
   now="$(date +%s)"
+  # The last detected host wake, read once per pass; 0 when absent or not an
+  # integer.
+  if [ -f "$LOGS_DIR/.host_woke_at" ]; then
+    IFS=$' \t\n' read -r woke 2>/dev/null <"$LOGS_DIR/.host_woke_at" || :
+  fi
+  case "$woke" in '' | *[!0-9]*) woke=0 ;; esac
+  woke=$((10#$woke))
   while IFS= read -r b; do
     [ -n "$b" ] || continue
     # A remote run's mirror logs are not its liveness, and its job runs its own
@@ -2914,7 +3810,18 @@ check_stalled_runs() {
     # Nothing written yet — a run launched moments ago. Not assessable, not a
     # stall; look again next pass.
     [ "$newest" -gt 0 ] || continue
-    staleness=$((now - newest))
+    # Silence is measured from the later of the newest output and the last
+    # host wake, so a sleep is never read as a hang. Every tier below reads the
+    # discounted `staleness`.
+    raw=$((now - newest))
+    since="$newest"
+    [ "$woke" -gt "$since" ] && since="$woke"
+    staleness=$((now - since))
+    if [ "$woke" -gt "$newest" ] && [ "$raw" -ge "$STALL_WARN_SECS" ] &&
+      [ "$(registry_get "$b" stall_wake_noted)" != "$woke" ]; then
+      log "stall-watchdog: '$b' silent ${raw}s, but the host woke at $(stall_human_time "$woke") — measuring silence from the wake"
+      registry_set "$b" stall_wake_noted "$woke"
+    fi
 
     if [ "$staleness" -lt "$STALL_WARN_SECS" ]; then
       # Output is flowing. Clear any warn flag, which is what makes a LATER
@@ -2993,7 +3900,7 @@ check_stalled_runs() {
     fi
     if [ -n "$why" ]; then
       log "stall-watchdog: '$b' -> failed ($why)"
-      registry_set "$b" status failed
+      registry_set "$b" status failed pid ""
       notify failed "$b" "$log_path" "(stall-watchdog: $why)"
       registry_set "$b" stall_killing ""
       continue
@@ -3001,23 +3908,62 @@ check_stalled_runs() {
 
     # Recover: restore the last committed checkpoint — safe by the commit-per-unit
     # invariant, see the header — and resume from the committed ledger or
-    # checklist through spawn_engine's pause-resume path (5th argument). A failed
-    # reset is logged and the resume proceeds: the ledger still names where to
-    # continue, and refusing here would strand a run whose only problem is a
-    # working copy an operator can fix.
-    log "stall-watchdog: '$b' -> reset --hard HEAD and resume (restart #$((restarts + 1)))"
-    git -C "$worktree" reset --hard HEAD >>"$log_path" 2>&1 ||
-      log "stall-watchdog: reset --hard failed for '$b' (see $log_path) — resuming anyway"
-    # Overwrite whatever note was there: the pause-resume clause the engine is
-    # handed points at this file, so it has to describe THIS teardown.
-    mkdir -p "$worktree/$state_rel" 2>/dev/null || true
-    printf 'Auto-recovered by the stall-watchdog at %s.\nThe hung dispatch (last output %s) was killed and its UNCOMMITTED work discarded with `git reset --hard HEAD`.\nResume deterministically from the first `[ ]` entry of the committed ledger or checklist; every `[x]` entry is intact.\n' \
+    # checklist through spawn_engine's pause-resume path (5th argument). The
+    # copy is checked first, so git never reads a record the run rewrote; in job
+    # mode the branch's own commits are checked for job surfaces; and the reset
+    # refuses a tip that changes a protected path, because the resumed session,
+    # and in job mode the post-session steps, would run what it wrote. Each
+    # refusal gives the run up. A reset that fails after its check passed is
+    # logged and the resume proceeds: the ledger still names where to continue,
+    # and refusing there would strand a run whose only problem is a working copy
+    # an operator can fix.
+    if [ -z "$RUN_MAIN" ]; then
+      why="stalled ${staleness}s, $RUN_MAIN_REFUSAL"
+    elif ! hr_run_copy_check_var "$RUN_MAIN" "$worktree"; then
+      why="stalled ${staleness}s, the working copy $worktree is not one this repository lists ($HR_RUN_REFUSAL)"
+    elif [ "$JOB_MODE" = "1" ] && ! stall_job_surfaces_ok >>"$log_path" 2>&1; then
+      why="stalled ${staleness}s, the branch's own commits change a job surface, or that could not be checked (see $log_path)"
+    else
+      log "stall-watchdog: '$b' -> reset to the last commit and resume (restart #$((restarts + 1)))"
+      reset_rc=0
+      hr_run_reset_var >>"$log_path" 2>&1 || reset_rc=$?
+      case "$reset_rc" in
+        0) ;;
+        1) why="stalled ${staleness}s, the reset was refused ($HR_RUN_RESET_REFUSAL)" ;;
+        *) log "stall-watchdog: reset failed for '$b' (see $log_path) — resuming anyway" ;;
+      esac
+    fi
+    note_rel="$state_rel/PAUSE_PROGRESS.md"
+    if [ -z "$why" ] && ! hr_run_path_safe "$worktree" "$note_rel"; then
+      why="stalled ${staleness}s, the state directory in $worktree is not safe to write"
+    fi
+    if [ -z "$why" ]; then
+      # Overwrite whatever note was there: the pause-resume clause the engine is
+      # handed points at this file, so it has to describe THIS teardown. The
+      # path is checked again after the `mkdir -p`, which can only have created
+      # real directories.
+      mkdir -p "$worktree/$state_rel" 2>/dev/null || true
+      hr_run_path_safe "$worktree" "$note_rel" ||
+        why="stalled ${staleness}s, the state directory in $worktree is not safe to write"
+    fi
+    if [ -n "$why" ]; then
+      log "stall-watchdog: '$b' -> failed ($why)"
+      registry_set "$b" status failed pid ""
+      notify failed "$b" "$log_path" "(stall-watchdog: $why)"
+      registry_set "$b" stall_killing ""
+      continue
+    fi
+    printf 'Auto-recovered by the stall-watchdog at %s.\nThe hung dispatch (last output %s) was killed and its UNCOMMITTED work discarded by a reset to the last commit.\nResume deterministically from the first `[ ]` entry of the committed ledger or checklist; every `[x]` entry is intact.\n' \
       "$(date '+%Y-%m-%dT%H:%M:%S')" "$(stall_human_time "$newest")" \
-      >"$worktree/$state_rel/PAUSE_PROGRESS.md"
+      >"$worktree/$note_rel"
     registry_set "$b" stall_restarts "$((restarts + 1))"
     registry_set "$b" stall_warned ""
     registry_set "$b" status running
-    spawn_engine "$b" "$worktree" "$log_path" "" 1
+    if ! spawn_engine "$b" "$worktree" "$log_path" "" 1; then
+      spawn_refused "$b" "$log_path"
+      registry_set "$b" stall_killing ""
+      continue
+    fi
     # Lowered AFTER the spawn, so nothing between the kill and the relaunch can
     # be classified by a subshell this pass tore down. A restarted run that then
     # exits before this line is left `running` with a dead pid — which the next
@@ -3043,7 +3989,7 @@ EOF
 # again.
 fail_before_launch() {
   local branch="$1" file="$2" fname="$3" reason="$4"
-  registry_set "$branch" status failed
+  registry_set "$branch" status failed pid ""
   mv "$file" "$ARCHIVE_DIR/failed_$(date '+%Y%m%d%H%M%S')_$fname" 2>/dev/null || rm -f "$file"
   notify failed "$branch" "$LOGS_DIR/$branch.log" "$reason"
 }
@@ -3060,25 +4006,37 @@ reject_preserving_status() {
   notify failed "$branch" "$LOGS_DIR/$branch.log" "$reason"
 }
 
+# watcher_commit <worktree> <rel> <subject> — the watcher's commit of one placed
+# artifact: `hr_commit_placed` from RUN_MAIN, by plumbing, running no hook and
+# committing nothing else the run staged. Its exit codes are that function's;
+# an empty RUN_MAIN is 1, with RUN_MAIN_REFUSAL on stderr.
+watcher_commit() {
+  if [ -z "$RUN_MAIN" ]; then
+    echo "$self: $RUN_MAIN_REFUSAL — refusing to commit" >&2
+    return 1
+  fi
+  hr_commit_placed "$RUN_MAIN" "$@"
+}
+
 # remote_commit_and_push <branch> <worktree> <log_path> <file> <fname> <dest> <rel> <subject> <what>
 #
 # The remote arm's commit-and-push, BLOCKING (REMOTE DISPATCH in the header):
-# 0 = <rel> is committed and origin/<branch> carries HEAD; 1 = it is not, and
-# fail_before_launch has already run, so the caller dispatches nothing. The
-# library's staging, identical-re-drop skip and landed test (THE ARTIFACT
-# PLACEMENT in lib/harness-run-lib.sh) with the local arm's wrappers; the push
-# stays a separate statement from the commit. <dest> is the caller's.
+# 0 = <rel> is committed and origin/<branch> carries the branch; 1 = it is not,
+# and fail_before_launch has already run, so the caller dispatches nothing. The
+# watcher's commit, the library's identical-re-drop skip and its landed test
+# (THE ARTIFACT PLACEMENT in lib/harness-run-lib.sh) with the push wrapper; the
+# push stays a separate statement from the commit. <dest> is the caller's.
 remote_commit_and_push() {
   local branch="$1" worktree="$2" log_path="$3" file="$4" fname="$5"
   local dest="$6" rel="$7" subject="$8" what="$9" rc=0
 
-  hr_commit_placed "$COMMIT_ON_BRANCH" "$worktree" "$rel" "$subject" >>"$log_path" 2>&1 || rc=$?
+  watcher_commit "$worktree" "$rel" "$subject" >>"$log_path" 2>&1 || rc=$?
   case "$rc" in
     3) log "the $what for '$branch' is already committed (identical re-drop) — skipping the commit, pushing anyway" ;;
     0) log "committed the $what for '$branch' ($subject)" ;;
     *)
-      log "commit-on-branch.sh could not commit the $what for '$branch' — not dispatching (see $log_path)"
-      fail_before_launch "$branch" "$file" "$fname" "(commit-on-branch.sh could not commit the $what — nothing dispatched; see $log_path)"
+      log "the watcher's commit could not commit the $what for '$branch' — not dispatching (see $log_path)"
+      fail_before_launch "$branch" "$file" "$fname" "(the watcher's commit could not commit the $what — nothing dispatched; see $log_path)"
       return 1
       ;;
   esac
@@ -3153,6 +4111,19 @@ process_inbox_file() {
   # the lane commits the whole machine to this repository, which is why it sits
   # below every cheaper refusal. A REMOTE drop skips the usage hold, the cap and
   # the lane, keeping the rest in this order (REMOTE DISPATCH in the header).
+  #
+  # THE SANDBOX PREFLIGHT sits between the branch-owning-record rejections and
+  # the lane. It is below those rejections because they archive while preserving
+  # the record's status, and its own refusal (fail_before_launch) overwrites it
+  # with `failed`. It judges only a fresh LOCAL launch: the resume passes, job
+  # mode and a remote drop are left to the run profile's `failIfUnavailable`, and
+  # the remote job is refused by its own `doctor --remote-job` preflight. It
+  # refuses only on a definite missing piece; an `uncertain` AppArmor answer
+  # never refuses, and the library's probe does not read AppArmor at all. A taken
+  # `sandbox.optOut`, read from the main checkout only, exempts the drop. The
+  # prerequisite table is owned by cli/src/doctor/sandboxPrerequisites.ts and
+  # reaches this script through the library's mirror
+  # (hr_sandbox_prereq_probe_var, hr_sandbox_opted_out).
   # ---------------------------------------------------------------------------
 
   # The global kill switch, honored before anything is launched. Deferring leaves
@@ -3245,6 +4216,15 @@ process_inbox_file() {
     return 0
   fi
 
+  # The sandbox preflight (THE SANDBOX PREFLIGHT above). Archived, never deferred:
+  # a host does not install its own packages, so a deferral would retry this drop
+  # on every pass without bound.
+  if [ "$remote" != 1 ] && ! hr_sandbox_opted_out "$MAIN_REPO" && ! hr_sandbox_prereq_probe_var; then
+    log "this machine cannot sandbox an unattended run — not launching '$branch': $HR_SANDBOX_REFUSAL"
+    fail_before_launch "$branch" "$file" "$fname" "(this machine cannot sandbox the run: $HR_SANDBOX_REFUSAL — nothing launched; npx autonomous-sdlc-harness doctor reports it under sandbox-prerequisites)"
+    return 0
+  fi
+
   # The machine-level lane: the shared account state first, then the lane itself.
   # A deferral here is a CAPACITY deferral (return 10) and not a policy hold —
   # the file stays in the inbox, no record is written, and the next pass asks
@@ -3312,16 +4292,13 @@ process_inbox_file() {
     # honest from its very first step, and what stops the prompt from being left
     # dangling-uncommitted and lost when the branch reaches a pull request.
     #
-    # Only the prompt is staged, by explicit path — never `git add -A` or
-    # `git add .`, matching the no-blanket-add rule every unattended commit point
-    # in this family follows. The nothing-staged pre-check is what makes
-    # an identical re-drop of an already-committed prompt a no-op instead of an
-    # empty commit; when there IS a diff, the WRAPPER does the real staging and
-    # the commit, so this commit point inherits its protected-branch refusal
-    # rather than re-implementing it. The wrapper stages paths RELATIVE TO THE
-    # REPOSITORY TOP, so it is handed the repo-relative path. The placement
-    # itself lives in lib/harness-run-lib.sh (THE ARTIFACT PLACEMENT), shared
-    # with a job that starts a run.
+    # Only the prompt is committed, by its repo-relative path, and nothing else
+    # the run's index holds: the watcher's commit (`watcher_commit`) builds the
+    # commit by plumbing in the main checkout, runs no hook, and refuses a
+    # protected branch from the main checkout's configuration. A placed blob
+    # equal to the one already committed is an identical re-drop and commits
+    # nothing. The placement itself lives in lib/harness-run-lib.sh (THE
+    # ARTIFACT PLACEMENT), shared with a job that starts a run.
     #
     # A FAILURE AT EITHER STEP IS LOGGED AND THE RUN LAUNCHES ANYWAY: a prompt
     # commit that did not land has to be VISIBLE, and it must never be the reason
@@ -3334,7 +4311,7 @@ process_inbox_file() {
       remote_commit_and_push "$branch" "$worktree" "$log_path" "$file" "$fname" \
         "$prompt_dest" "$prompt_rel" "$prompt_subject" "task prompt" || return 0
     else
-      hr_commit_placed "$COMMIT_ON_BRANCH" "$worktree" "$prompt_rel" "$prompt_subject" >>"$log_path" 2>&1 || prompt_rc=$?
+      watcher_commit "$worktree" "$prompt_rel" "$prompt_subject" >>"$log_path" 2>&1 || prompt_rc=$?
       case "$prompt_rc" in
         3) log "the task prompt for '$branch' is already committed (identical re-drop) — skipping the commit" ;;
         0)
@@ -3366,7 +4343,7 @@ process_inbox_file() {
     fi
 
     # (3c) Place, archive, commit and push — the task path's block mirrored: the
-    # same wrapper, the same identical-re-drop skip, the same non-blocking rule on
+    # same commit, the same identical-re-drop skip, the same non-blocking rule on
     # a failed commit or push — and the same blocking rule on the remote arm. Its
     # rationale is stated once, above.
     local docs_rel="$state_rel/docs_catalog/${branch}_docs.md"
@@ -3379,7 +4356,7 @@ process_inbox_file() {
       remote_commit_and_push "$branch" "$worktree" "$log_path" "$file" "$fname" \
         "$docs_dest" "$docs_rel" "$docs_subject" "docs checklist" || return 0
     else
-      hr_commit_placed "$COMMIT_ON_BRANCH" "$worktree" "$docs_rel" "$docs_subject" >>"$log_path" 2>&1 || docs_rc=$?
+      watcher_commit "$worktree" "$docs_rel" "$docs_subject" >>"$log_path" 2>&1 || docs_rc=$?
       case "$docs_rc" in
         3) log "the docs checklist for '$branch' is already committed (identical re-drop) — skipping the commit" ;;
         0)
@@ -3394,19 +4371,23 @@ process_inbox_file() {
     # (2b) Review path: REUSE the branch's existing working copy when it is
     # usable, else recreate it FOR THE EXISTING BRANCH. Never a fresh branch off
     # the default one — the work being reviewed is already on this branch.
+    local reuse_fail=""
     if [ -d "$worktree" ]; then
-      # Sanity-check before building on it: the right branch AND no modified
-      # TRACKED files. Untracked state-tree artifacts left by a previous run are
-      # expected and tolerated — that is the same clean-of-tracked-changes
-      # invariant the pause protocol gives the run itself. The branch is read
-      # through the library's probe, which uses `symbolic-ref` and so needs no
-      # recent-git flag, and prints nothing on a detached HEAD (which fails the
-      # comparison below, as it should).
-      local current_branch reuse_fail=""
-      current_branch="$(hr_current_branch "$worktree")"
-      if [ "$current_branch" != "$branch" ]; then
-        reuse_fail="the working copy $worktree is on branch '${current_branch:-?}', not '$branch' — fix the checkout and drop the review file again"
-      elif [ -n "$(git -C "$worktree" status --short 2>/dev/null | grep -v '^??')" ]; then
+      # Sanity-check before building on it: a copy this repository lists, on the
+      # right branch, AND no modified TRACKED files. Untracked state-tree
+      # artifacts left by a previous run are expected and tolerated — that is
+      # the same clean-of-tracked-changes invariant the pause protocol gives the
+      # run itself. The check reads the copy's records once, without git, and
+      # sets the branch read from the main checkout (empty on a detached HEAD,
+      # which fails the comparison below, as it should); the clean test then
+      # runs git pinned, never through the copy's own `.git`.
+      if [ -z "$RUN_MAIN" ]; then
+        reuse_fail="$RUN_MAIN_REFUSAL"
+      elif ! hr_run_copy_check_var "$RUN_MAIN" "$worktree"; then
+        reuse_fail="the working copy $worktree is not one this repository lists ($HR_RUN_REFUSAL) — remove it and drop the review file again"
+      elif [ "$HR_RUN_COPY_BRANCH" != "$branch" ]; then
+        reuse_fail="the working copy $worktree is on branch '${HR_RUN_COPY_BRANCH:-?}', not '$branch' — fix the checkout and drop the review file again"
+      elif ! hr_run_copy_clean; then
         reuse_fail="the working copy $worktree has uncommitted tracked changes — clean them and drop the review file again"
       fi
       if [ -n "$reuse_fail" ]; then
@@ -3430,21 +4411,54 @@ process_inbox_file() {
         fail_before_launch "$branch" "$file" "$fname" "(working-copy recreation failed)"
         return 0
       fi
+      # The recreated copy is checked as a reused one is, so the fast-forward
+      # and the surface check below have the values they act on.
+      if [ -z "$RUN_MAIN" ]; then
+        reuse_fail="$RUN_MAIN_REFUSAL"
+      elif ! hr_run_copy_check_var "$RUN_MAIN" "$worktree"; then
+        reuse_fail="the recreated working copy $worktree is not one this repository lists ($HR_RUN_REFUSAL)"
+      elif [ "$HR_RUN_COPY_BRANCH" != "$branch" ]; then
+        reuse_fail="the recreated working copy $worktree is on branch '${HR_RUN_COPY_BRANCH:-?}', not '$branch'"
+      fi
+      if [ -n "$reuse_fail" ]; then
+        log "cannot use the recreated working copy for '$branch': $reuse_fail — failing fast (not parking)"
+        fail_before_launch "$branch" "$file" "$fname" "($reuse_fail)"
+        return 0
+      fi
     fi
 
     # Remote arm: bring the copy level with origin/<branch> before touching it —
     # the job, not this copy, is where the branch advanced (REMOTE DISPATCH).
+    # The fetch runs in the main checkout, pinned, and only when the main
+    # `.git/config` names origin's URL; the fast-forward is the library's, which
+    # refuses a target commit that changes a protected path.
     if [ "$remote" = 1 ]; then
-      if ! git -C "$worktree" fetch origin "$branch" >>"$log_path" 2>&1; then
-        log "git fetch origin $branch failed in $worktree — not dispatching (see $log_path)"
-        fail_before_launch "$branch" "$file" "$fname" "(git fetch origin $branch failed in the working copy — nothing dispatched; see $log_path)"
+      if ! hr_remote_url_configured "$HR_RUN_MAIN" origin; then
+        log "git fetch origin $branch not attempted: $HR_RUN_MAIN/.git/config names no URL for origin — not dispatching"
+        fail_before_launch "$branch" "$file" "$fname" "(git fetch origin $branch not attempted: the main checkout's .git/config names no URL for origin — nothing dispatched)"
         return 0
       fi
-      if ! git -C "$worktree" merge --ff-only "origin/$branch" >>"$log_path" 2>&1; then
-        log "git merge --ff-only origin/$branch failed in $worktree — not dispatching (see $log_path)"
-        fail_before_launch "$branch" "$file" "$fname" "(git merge --ff-only origin/$branch failed in the working copy — nothing dispatched; see $log_path)"
+      if ! hr_run_main_git fetch --no-recurse-submodules origin "+refs/heads/$branch:refs/remotes/origin/$branch" >>"$log_path" 2>&1; then
+        log "git fetch origin $branch failed in $HR_RUN_MAIN — not dispatching (see $log_path)"
+        fail_before_launch "$branch" "$file" "$fname" "(git fetch origin $branch failed — nothing dispatched; see $log_path)"
         return 0
       fi
+      local ff_rc=0
+      hr_run_fast_forward_var "refs/remotes/origin/$branch" >>"$log_path" 2>&1 || ff_rc=$?
+      if [ "$ff_rc" -ne 0 ]; then
+        log "the fast-forward of '$branch' to origin/$branch failed in $worktree (exit $ff_rc: $HR_RUN_FF_REFUSAL) — not dispatching (see $log_path)"
+        fail_before_launch "$branch" "$file" "$fname" "(the fast-forward of the working copy to origin/$branch failed: $HR_RUN_FF_REFUSAL — nothing dispatched; see $log_path)"
+        return 0
+      fi
+    fi
+
+    # The branch as it now stands, and the copy's tree, must change no protected
+    # path relative to origin's default branch: the session this drop launches,
+    # and the hooks and settings it loads, would run what the branch wrote.
+    if ! hr_run_surface_check_var "refs/heads/$branch" copy; then
+      log "the branch '$branch' carries changes to files that run outside the sandbox, or they could not be checked ($HR_RUN_SURFACE_REFUSAL) — not launching"
+      fail_before_launch "$branch" "$file" "$fname" "(the branch carries changes to files that run outside the sandbox, or they could not be checked: $HR_RUN_SURFACE_REFUSAL — nothing launched)"
+      return 0
     fi
 
     state_rel="$(run_state_dir "$worktree")" || state_rel=""
@@ -3463,7 +4477,6 @@ process_inbox_file() {
     # pushed before dispatch, below (REMOTE DISPATCH in the header).
     local review_rel="$state_rel/user_reviews/$fname"
     local review_dest="$worktree/$state_rel/user_reviews/$fname"
-    mkdir -p "$worktree/$state_rel/user_reviews"
     if [ -f "$review_dest" ] && ! cmp -s "$file" "$review_dest"; then
       # SAME FILENAME, DIFFERENT CONTENT: that round was already processed and
       # committed, so overwriting it would dirty a tracked file and wedge the
@@ -3475,8 +4488,13 @@ process_inbox_file() {
       return 0
     fi
     # An identical-content re-drop is harmless: the copy below is byte for byte
-    # what is already there, so the tree stays clean.
-    cp "$file" "$review_dest"
+    # what is already there, so the tree stays clean. The placement refuses a
+    # path reached through a symbolic link, which would write outside the copy.
+    if ! hr_place_artifact "$worktree" "$file" "$review_rel"; then
+      log "could not place the review '$fname' at $review_dest (unsafe path or copy failure) — rejecting"
+      fail_before_launch "$branch" "$file" "$fname" "(the review could not be placed at $review_rel in the working copy — nothing launched)"
+      return 0
+    fi
     mv "$file" "$ARCHIVE_DIR/$(date '+%Y%m%d%H%M%S')_$fname" 2>/dev/null || rm -f "$file"
     log "copied the review -> $review_dest; archived the inbox file"
     if [ "$remote" = 1 ]; then
@@ -3939,12 +4957,23 @@ EOF
 # else, then the reconcile that frees capacity for the passes that read the cap.
 # -----------------------------------------------------------------------------
 tick() {
+  # First, ahead of the kill-switch return, so a braked watcher still records
+  # its passes and a wake is never mistaken for silence.
+  host_wake_pass
+
   # Drop the library's per-process cache so an edit to `harness.config.json` is
   # picked up without restarting the daemon. The anchors above are start-up
   # values and stay as they are for this process's life — moving the state
   # directory under a live watcher needs a restart, by design.
   hr_config_reset
   hr_config_load "$MAIN_REPO" || :
+  keep_awake_resolve
+
+  # Ahead of the kill-switch return: the brake stops launches and resumes only,
+  # and runs in flight keep running under it, so the hold they carry must still
+  # follow mains power and a switch of `execution.keepAwake` to false made while
+  # braked must still be applied. Once per pass, and never in run_job.
+  keep_awake_pass
 
   if kill_switch_active; then
     log "global kill switch active — not launching or resuming runs this pass"
@@ -4020,7 +5049,9 @@ tick() {
 }
 
 watch_loop() {
-  log "watcher starting (inbox=$INBOX_DIR, cap=$MAX_PARALLEL_RUNS, poll=${POLL_INTERVAL_SECS}s)"
+  local keep_awake_note="$KEEP_AWAKE_MODE"
+  [ "$KEEP_AWAKE_MODE" != "off" ] || keep_awake_note="$KEEP_AWAKE_MODE ($KEEP_AWAKE_REASON)"
+  log "watcher starting (inbox=$INBOX_DIR, cap=$MAX_PARALLEL_RUNS, poll=${POLL_INTERVAL_SECS}s, keep-awake=$keep_awake_note)"
   registry_init
   while true; do
     tick
@@ -4229,7 +5260,7 @@ job_auto_resume() {
     log "job: the hosted time budget's PAUSE was pending at the resume of '$branch' after $why — re-dropped it"
   fi
   notify resumed "$branch" "$log_path" "automatic resume $count/$REMOTE_AUTO_RESUME_MAX after $why ($(job_label))"
-  spawn_engine "$branch" "$worktree" "$log_path" "" 1 || registry_set "$branch" status failed
+  spawn_engine "$branch" "$worktree" "$log_path" "" 1 || spawn_refused "$branch" "$log_path"
   return 0
 }
 
@@ -4343,7 +5374,7 @@ run_job() {
       log "job: launching run for '$branch' (engine=$engine) in $worktree (log: $log_path)"
       spawn_engine "$branch" "$worktree" "$log_path"
       ;;
-  esac || registry_set "$branch" status failed
+  esac || spawn_refused "$branch" "$log_path"
 
   # The runner-wait note belongs to the job's own start: a later automatic
   # resume's `resumed` comment never carries it (THE RUNNER WAIT in the header).
@@ -4359,6 +5390,7 @@ run_job() {
         usage_waiting=0
         sleep "$POLL_INTERVAL_SECS"
         reconcile_stale_runs
+        host_wake_pass
         check_stalled_runs
         usage_gate
         [ "$(registry_get "$branch" status)" = "running" ] || continue
@@ -4433,6 +5465,12 @@ run_job() {
         esac
         ;;
       failed)
+        # A launch spawn_engine refused is not retried: the refusal does not
+        # change between attempts, and no session ran.
+        if [ -n "$SPAWN_REFUSAL" ]; then
+          detail="not launched: $SPAWN_REFUSAL"
+          break
+        fi
         restarts="$(job_int "$(registry_get "$branch" stall_restarts)")" || restarts=0
         if [ "$STALL_CHECK_ENABLED" = "1" ] && [ "$restarts" -ge "$STALL_MAX_RESTARTS" ]; then
           log "job: no auto-resume of '$branch' — the stall watchdog gave up on it"
