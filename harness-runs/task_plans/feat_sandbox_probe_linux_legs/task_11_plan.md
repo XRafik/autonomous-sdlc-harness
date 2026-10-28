@@ -108,5 +108,13 @@
 - `grep -n 'the Linux legs are owed under roadmap item 21' docs/development.md` finds nothing, and `grep -n 'feat_sandbox_probe_job_mode' docs/development.md` finds the rows-not-taken paragraph.
 - Every command the recipe and the refusal paragraph give sits alone on its own line inside a fenced block (`harness-runs/lessons.md` → *Adopter-facing documentation*): `grep -nE '^[a-z].*; [a-z]' docs/development.md` finds no joined command inside Gate 15's fences.
 - No sentence the task adds states a Linux result as measured: every Linux expectation is worded as expected, and every baseline names its date and run.
+
+**Deviations from plan:**
+
+- The `probe` block adds three lines the plan does not list: `git config --global user.name "<name>"` and `user.email "<email>"`, because the container has no commit identity and the wrappers legs commit; and a bare `claude` line to sign in before the `claude plugin` lines, where the credential paragraph says the maintainer signs in. The clone is spelled `git clone --branch dev https://github.com/firu-daniel/autonomous-sdlc-harness.git` (the `repository.url` in `cli/package.json`), so the in-memory token answers git's HTTPS prompt; the `credential.helper` line precedes it.
+- The plan's `<stateDir>` is written as this repository's `harness-runs` in the RF4 drop path and the PD19 `jq` path, since Gate 15 is this repository's own gate.
+- W6's baseline is 2026-10-28, run 3, not run 2: `docs/sandbox-verification.md` §0 *The probe's third run* lists W6 among the rows that passed again.
+- Verification, leg table: the `sed` diff the plan names was refused at the permission layer (a compound command under `dontAsk`). It rests instead on `harness-runs/scratch/task11_leg_table_diff.mjs`, run through `bash scripts/scratch-run.sh`, which applies `cli/test/sandbox-probe-git-and-legs.test.mjs`'s own cell extraction to the table and compares it with `bash scripts/sandbox-probe.sh --list`: `doc rows 21, --list rows 21, differing 0`. That test file itself is deferred to the Run gates phase (it is in the suite `commands.test` runs, and this unit did not edit it).
+- Verification, greps: `grep -n 'the Linux legs are owed under roadmap item 21' docs/development.md` printed nothing; `grep -n 'feat_sandbox_probe_job_mode'` found only the rows-not-taken paragraph; `grep -nE '^[a-z].*; [a-z]'` matched two prose lines in `## 5`'s opening, none inside Gate 15's fences.
 </content>
 </invoke>
