@@ -73,7 +73,7 @@ TypeScript on PGlite embedded, Python on psycopg remote: today's arrangement, se
 
 **(b-pg): Python on `pgembed` embedded and psycopg remote.**
 
-- **Client sees:** `uvx docsrag`. uv fetches a managed Python if none is present (https://docs.astral.sh/uv/concepts/python-versions/), so the only prerequisite is the `uv` binary.
+- **Client sees:** `uvx ragscene`. uv fetches a managed Python if none is present (https://docs.astral.sh/uv/concepts/python-versions/), so the only prerequisite is the `uv` binary.
 - **Can the client tell?** Not by relevance. The same SQL and the same `tsvector` tokenizer run on both sides. PostgreSQL 17 embedded against 18 remote is **Unconfirmed** as identical for `tsvector` until tested.
 - **Maintenance:** one core. The remote store exists today: every SQL statement `store.ts` issues runs unchanged through psycopg (`docs-retrieval-service/README.md:142`). Pool and reconnect remain. libpq gives fork 03's TLS defaults natively, which Node needed mapped by hand (`README.md` → §4). **The eval harness must be ported**: 15 modules, 56 imports of `cli/dist` (`grep -rn 'cli/dist' evals/docs-retrieval/*.mjs`; `01-current-mechanism.md` → §4 #12). Under (c) it moves as is.
 - **Shared server, Documented.** The `pgserver` README says "if other process use same pgadata, server process will be shutdown when all stop". `pgembed/postgres_server.py` implements it: an inter-process lock, a per-directory `.handle_pids.json`, stop on the last handle (review). Two stdio sessions share one server, answering round 1's concurrency risk (`README.md` → §5.4). Left to test: a SIGKILLed session's stale pid, the lock on a network filesystem, and two sessions refreshing at once.

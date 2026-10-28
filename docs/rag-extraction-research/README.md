@@ -21,6 +21,21 @@
 
 ---
 
+## Maintainer rulings after round 2 (2026-10-28)
+
+Recorded after the synthesis; the sections below were not rewritten for them, so where they conflict, these win.
+
+- **R3.1 Name.** The product is **RagScene** (`ragscene`), consistent with the harness's pending rename to DevScene. Every `ragscene` / `RAGSCENE_` name in this folder replaces the earlier working name `docsrag`.
+- **R3.2 Platform.** RagScene will most likely always run on Linux, locally too (a container or VM on a Mac). `pgembed`'s missing macOS wheels (Intel, pre-15) therefore matter less.
+- **R3.3 AGPL.** Building our own `pgembed` wheels without `pg_search` (the 6 × 3 matrix) is most likely not done; the AGPL licence of the bundled `pg_search` is to be checked instead (§7 step 7).
+- **R3.4 Fallback.** If `pgembed` fails the one-day test, the fallback is Python against a local Postgres from RagScene's own Docker image, or TypeScript.
+- **R3.5 Hosted tier.** A hosted RagScene is **on the roadmap**; round 1's "hosted SaaS deferred" now means "not first".
+- **R3.6 Runtime not confirmed.** Python is the maintainer's lean, but not confirmed; the one-day `pgembed` test (§7 step 2) is filed as its own issue first, since it may surface unexpected points on Python.
+- **R3.7 Order.** Finish the sandbox series, then the DevScene rename (expected to take a couple of days), and only then RagScene: one big task at a time. No RagScene work, the private `ragscenedev` repository included, starts before the rename is done.
+- **R3.8 History.** The private `ragscenedev` repository is a workspace for early extraction, fixes and issues; at a stable point everything moves to the public `firu-daniel/ragscene` as a single initial commit. Git history is not kept, from the harness or from `ragscenedev`.
+
+- **Extraction order.** How RagScene is started (private `ragscenedev`, the cut, adoption, the move to the public repository) is [`07-extraction-plan.md`](07-extraction-plan.md) → `## 6`. Where it departs from `## 7` below (#201–#202 land in RagScene; the copy comes first), `07` wins.
+
 ## 1. The answer in brief
 
 - **Extraction is feasible, and the seam is thin.** Retrieval is pulled by agents, with no hooks (`01-current-mechanism.md → §2`, `§4`).
@@ -72,8 +87,8 @@ search:
 store:
   kind: embedded                      # embedded | postgres
   postgres:
-    url_env: DOCSRAG_DATABASE_URL     # no password in the URL
-    password_env: DOCSRAG_DB_PASSWORD # or iam: aws-rds | azure-entra | gcp-cloudsql (minted per connect)
+    url_env: RAGSCENE_DATABASE_URL     # no password in the URL
+    password_env: RAGSCENE_DB_PASSWORD # or iam: aws-rds | azure-entra | gcp-cloudsql (minted per connect)
     schema: handbook
     lexical: auto                     # auto (pg_textsearch if loaded, else tsvector-bm25) | tsvector-bm25; never ts_rank
     tls: { mode: verify-full, ca: system, allow_weaker: false }   # ca: system | bundled | <file>
@@ -234,7 +249,7 @@ Round 1's "calibrated abstention" applies only to the opt-in `fused-rerank` and 
 | 7 | **Licence policy** (maintainer): an "avoid MS MARCO-trained weights" rule and its reach; the Llama 3.2 terms; `pgembed`'s AGPL binary if (b-pg) | A recorded decision before any image carries weights or `pgembed` |
 | 8 | **Remote store for the chosen engine**: pool, reconnect (#203), per-connect tokens; a managed host without `pg_textsearch` (Supabase or RDS) | A restart survived; a token re-minted; the same scores as the local run, with no extension or superuser |
 | 9 | **Security fixes #200–#202**, landable here now | Issues closed |
-| 10 | **Extraction, index/serve split, `serve --http`, packaging** | `docsrag index` and `search` work on a non-harness directory; a cross-site `text/plain` POST is refused; each shape reaches a first query on a clean machine |
+| 10 | **Extraction, index/serve split, `serve --http`, packaging** | `ragscene index` and `search` work on a non-harness directory; a cross-site `text/plain` POST is refused; each shape reaches a first query on a clean machine |
 
 ## 8. Open questions
 
@@ -285,6 +300,7 @@ Source (fork, open-question number), then who settles it.
 | 04 — engine architecture | [`04-engine-architecture.md`](04-engine-architecture.md) | [`reviews/04-engine-architecture.md`](reviews/04-engine-architecture.md) — FAIL, PASS |
 | 05 — managed Postgres and lexical | [`05-managed-postgres-lexical.md`](05-managed-postgres-lexical.md) | [`reviews/05-managed-postgres-lexical.md`](reviews/05-managed-postgres-lexical.md) — FAIL, PASS |
 | 06 — models and modes | [`06-models-and-modes.md`](06-models-and-modes.md) | [`reviews/06-models-and-modes.md`](reviews/06-models-and-modes.md) — FAIL, PASS |
+| 07 — extraction plan | [`07-extraction-plan.md`](07-extraction-plan.md) | [`reviews/07-extraction-plan.md`](reviews/07-extraction-plan.md) — FAIL, FAIL; all applied, no third review |
 | Synthesis (round 1) | this file's predecessor | [`reviews/README.md`](reviews/README.md) — FAIL, PASS |
 
 ## Round 1 review response

@@ -235,12 +235,12 @@ Everything else defaults: an embedded PGlite store under the user data directory
 source:
   path: ./docs                     # or git: { url, ref, sparse: [docs/] }
   include: ["**/*.md"]             # rst/adoc with the pandoc extra
-index: { on: serve-start+watch }   # or manual (`docsrag index`), or schedule
+index: { on: serve-start+watch }   # or manual (`ragscene index`), or schedule
 store:
   kind: embedded                   # embedded (PGlite, Node runtime) | postgres (incl. local server)
   postgres:
-    service: docsrag               # libpq service; password via ~/.pgpass
-    # url_env: DOCSRAG_DATABASE_URL
+    service: ragscene               # libpq service; password via ~/.pgpass
+    # url_env: RAGSCENE_DATABASE_URL
     # iam: aws-rds | azure-entra | gcp-proxy   (token minted per connect)
     schema: handbook
     lexical: pg_textsearch         # pg_textsearch | tsvector-bm25 | ts_rank; no silent fallback

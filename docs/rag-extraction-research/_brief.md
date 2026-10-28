@@ -24,6 +24,17 @@ Framing given by the maintainer, to be taken as settled:
 - **R2.4: large/business corpus measurements belong to issue #199** (`rag chore_business_corpus_research`). Do not duplicate its eval design; literature and vendor evidence on what works for such corpora is in scope.
 - **R2.5: the four security gaps in today's code are filed** as #200–#203.
 
+## Round 3 rulings (maintainer, 2026-10-28, after the round 2 synthesis)
+
+- **R3.1 Name.** The product is **RagScene** (`ragscene`), consistent with the harness's pending rename to DevScene. Every `ragscene` / `RAGSCENE_` name in this folder replaces the earlier working name `docsrag`.
+- **R3.2 Platform.** RagScene will most likely always run on Linux, locally too (a container or VM on a Mac). `pgembed`'s missing macOS wheels (Intel, pre-15) therefore matter less.
+- **R3.3 AGPL.** Building our own `pgembed` wheels without `pg_search` (the 6 × 3 matrix) is most likely not done; the AGPL licence of the bundled `pg_search` is to be checked instead (§7 step 7).
+- **R3.4 Fallback.** If `pgembed` fails the one-day test, the fallback is Python against a local Postgres from RagScene's own Docker image, or TypeScript.
+- **R3.5 Hosted tier.** A hosted RagScene is **on the roadmap**; round 1's "hosted SaaS deferred" now means "not first".
+- **R3.6 Runtime not confirmed.** Python is the maintainer's lean, but not confirmed; the one-day `pgembed` test (§7 step 2) is filed as its own issue first, since it may surface unexpected points on Python.
+- **R3.7 Order.** Finish the sandbox series, then the DevScene rename (expected to take a couple of days), and only then RagScene: one big task at a time. No RagScene work, the private `ragscenedev` repository included, starts before the rename is done.
+- **R3.8 History.** The private `ragscenedev` repository is a workspace for early extraction, fixes and issues; at a stable point everything moves to the public `firu-daniel/ragscene` as a single initial commit. Git history is not kept, from the harness or from `ragscenedev`.
+
 ## The forks
 
 | File | Fork | Main sources |
@@ -34,6 +45,7 @@ Framing given by the maintainer, to be taken as settled:
 | `04-engine-architecture.md` | Round 2 (R2.1): engine per store type, dual runtime, or another architecture the client never sees | The web plus this repository |
 | `05-managed-postgres-lexical.md` | Round 2 (R2.2): the popular managed Postgres offerings and their lexical search, and the lexical-engine decision | The web plus this repository |
 | `06-models-and-modes.md` | Round 2 (R2.3): retrieval practice for large/business corpora, licence-clean embedders and rerankers, and a model-free default | The web plus this repository |
+| `07-extraction-plan.md` | Round 3: how to start the extraction (private `ragscenedev`, the cut, adoption, the move), ordered by R3.7 | This repository, Expause and straightedge history, GitHub and registry docs |
 
 ## Rules for every fork file
 
