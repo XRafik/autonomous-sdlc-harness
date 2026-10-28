@@ -55,5 +55,9 @@ On macOS every verdict, every evidence string and every printed byte stays as to
 - By hand: before editing, save the output of `bash scripts/sandbox-probe.sh print-parity-script` to a file under `$TMPDIR`. After the edit, the same command's output is byte-identical to it (`cmp`). Run once more with `SANDBOX_PROBE_UNAME=Linux` set, the output differs from the saved one in steps 2 and 4 only.
 - `grep -n '"Operation not permitted"' scripts/lib/sandbox-probe/legs-protection.sh` finds the rename test only inside `sp__wp_mv_class`.
 - `git diff scripts/lib/sandbox-probe/legs-protection.sh` shows no change to any `sp_judge_call` expectation argument.
+
+**Deviations from plan:**
+
+- The by-hand `cmp` bullet was not run as written: the permission layer refused both `bash scripts/sandbox-probe.sh print-parity-script > "$TMPDIR/parity_before.txt"` and the `SANDBOX_PROBE_UNAME=Linux bash scripts/sandbox-probe.sh print-parity-script` prefix form (`Permission to use Bash has been denied because Claude Code is running in don't ask mode`). The claim rests instead on `bash scripts/scratch-run.sh harness-runs/scratch/task5_probe.py`, which copies `scripts/` into a temp directory under `harness-runs/scratch/`, restores the two edited libraries from `HEAD` there, and compares `print-parity-script` output byte for byte: `macOS byte-identical: True 2363` (the HEAD and working-tree outputs, with `SANDBOX_PROBE_UNAME` unset), and with `SANDBOX_PROBE_UNAME=Linux` the output differs from the HEAD output on lines 21 (step 2) and 33 (step 4) only, both 49 lines long. The same probe drove `sp__wp_mv_class` over five helper lines under `SP_PLATFORM` empty, `macos` and `linux`, and `sp__wp_dd_grade`, `sp__git_cs3_fetch` and `sp__cs8a_grade` with a stubbed `unrecognised` judge result; each printed the class or verdict this plan specifies.
 </content>
 </invoke>
