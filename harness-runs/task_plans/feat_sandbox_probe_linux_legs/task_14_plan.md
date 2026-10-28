@@ -46,3 +46,5 @@
 - `npm test --workspace cli -- test/sandbox-probe-git-and-legs.test.mjs` passes, run from the repository root as one plain foreground command. That includes the existing *Gate 15's restated leg table matches --list, row for row* case.
 </content>
 </invoke>
+
+- **Deviations from plan:** The two `sp_result_line` refusal subtests expected `gates`' rows as `(T2,W7)`; Task 2's `gates` row is `T2,W7,T3`, so both expected messages now read `(T2,W7,T3)` — without it the suite fails on the leg table this task asserts. The `run --leg refusal` subtest sits inside the `--list prints the leg table` test. The Linux parity subtest also asserts each macOS ending occurs exactly once in the Darwin output, so the two-replacement comparison cannot pass vacuously.
