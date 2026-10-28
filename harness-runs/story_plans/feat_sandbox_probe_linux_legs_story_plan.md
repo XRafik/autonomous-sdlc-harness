@@ -108,7 +108,7 @@ Each entry resolves 1:1 to `harness-runs/task_plans/feat_sandbox_probe_linux_leg
 19. [x] **Task 23** — Test N3's and N4's grading on Linux against their macOS twins _(layer: cli)_ _(points: 8)_
 20. [x] **Task 18** — Test the glob-deny and registry legs' grading and RG3's restore, directly and through teardown _(layer: cli)_ _(points: 20)_
 21. [x] **Task 19** — Test the detached and loopback legs' grading _(layer: cli)_ _(points: 20)_
-22. [ ] **Task 20** — Test the refusal leg's grading _(layer: cli)_ _(points: 12)_
+22. [x] **Task 20** — Test the refusal leg's grading _(layer: cli)_ _(points: 12)_
 23. [ ] **Task 21** — Add the Linux rows of record, each *not yet measured*, and point the existing Linux rows at the legs that take them _(layer: general)_ _(points: 20)_
 
 ## Scope register
