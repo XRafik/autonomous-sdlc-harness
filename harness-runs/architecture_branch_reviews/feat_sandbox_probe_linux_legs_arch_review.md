@@ -20,7 +20,7 @@ Branch `feat_sandbox_probe_linux_legs`, reviewed 2026-10-28 against `dev`. The l
 
 ## Phase 2 Readiness — Ordered Fix List
 
-1. [ ] **Finding 1** — Read the loopback host from `SP__NET_LOOPBACK_HOST` in `legs-loopback.sh` instead of retyping `127.0.0.1` _(layer: general)_
+1. [x] **Finding 1** — Read the loopback host from `SP__NET_LOOPBACK_HOST` in `legs-loopback.sh` instead of retyping `127.0.0.1` _(layer: general)_
 
 ## Must Fix
 

@@ -234,19 +234,19 @@ sp__lb5_helper() {
   {
     printf '%s\n' '#!/usr/bin/env bash' \
       '# Written by scripts/lib/sandbox-probe/legs-loopback.sh for one session, then removed.'
-    printf 'clone=%q\ntoken=%q\nbound=%q\n' "$2" "$3" "$SP_LB5_SECONDS"
+    printf 'clone=%q\ntoken=%q\nbound=%q\nhost=%q\n' "$2" "$3" "$SP_LB5_SECONDS" "$SP__NET_LOOPBACK_HOST"
     cat <<'EOF'
 www="$clone/sbx_lb5_www"
 log="$clone/sbx_lb5.log"
 mkdir -p "$www" && printf '%s\n' "$token" >"$www/sbx_lb5.txt" && : >"$log"
-nohup timeout "$bound" python3 -u -m http.server --bind 127.0.0.1 --directory "$www" 0 </dev/null >"$log" 2>&1 &
+nohup timeout "$bound" python3 -u -m http.server --bind "$host" --directory "$www" 0 </dev/null >"$log" 2>&1 &
 disown
 port=""
 i=0
 while [ "$i" -lt 50 ]; do
   while IFS= read -r line; do
-    case "$line" in "Serving HTTP on 127.0.0.1 port "*)
-      port="${line#Serving HTTP on 127.0.0.1 port }"
+    case "$line" in "Serving HTTP on $host port "*)
+      port="${line#"Serving HTTP on $host port "}"
       port="${port%% *}"
       break
       ;;
@@ -398,7 +398,7 @@ sp__lb5() {
   if [ -n "$port" ]; then
     while [ "$i" -lt 3 ]; do
       [ "$i" -eq 0 ] || sleep 1
-      reply="$(curl -sS --max-time 5 "http://127.0.0.1:$port/sbx_lb5.txt" 2>&1)"
+      reply="$(curl -sS --max-time 5 "http://$SP__NET_LOOPBACK_HOST:$port/sbx_lb5.txt" 2>&1)"
       case "$reply" in *"$token"*) break ;; esac
       i=$((i + 1))
     done
@@ -445,8 +445,8 @@ sp_leg_loopback() {
     done
   else
     sp__lb_pair a "$SP__NET_PROFILE" "SP_RUN_PROFILE without its Bash(curl:*) deny entry" LB1 LB2
-    if profile_b="$(sp_scratch_profile sbx_lb_ip '.sandbox.network.allowedDomains += ["127.0.0.1"]' "$SP__NET_PROFILE")"; then
-      sp__lb_pair b "$profile_b" "the network scratch profile with 127.0.0.1 added to sandbox.network.allowedDomains" LB3 LB4
+    if profile_b="$(sp_scratch_profile sbx_lb_ip ".sandbox.network.allowedDomains += [\"$SP__NET_LOOPBACK_HOST\"]" "$SP__NET_PROFILE")"; then
+      sp__lb_pair b "$profile_b" "the network scratch profile with $SP__NET_LOOPBACK_HOST added to sandbox.network.allowedDomains" LB3 LB4
     else
       for row in LB3 LB4; do
         sp_result_line loopback "$row" "not run" "could not derive the sbx_lb_ip scratch profile from '$SP__NET_PROFILE'" ""
