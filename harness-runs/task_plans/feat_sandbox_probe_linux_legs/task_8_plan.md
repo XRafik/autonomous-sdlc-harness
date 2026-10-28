@@ -62,5 +62,21 @@ It reuses, unchanged:
 - The type check passes.
 - `grep -n 'sleep\|while' scripts/lib/sandbox-probe/legs-detached.sh` shows every loop bounded by `SP_BG9_SECONDS`, the worker's iterations or the outside poll.
 - By hand, `bash -c '. scripts/lib/sandbox-probe/core.sh; . scripts/lib/sandbox-probe/legs-detached.sh; f=$(mktemp "${TMPDIR:-/tmp}/wf5.XXXXXX"); printf "stat -f %%m: ?\nmtime 100\nmtime 103\n" >"$f"; sp__wf5_grade "$f"; echo "$SP_VERDICT: $SP_EVIDENCE"; rm -f "$f"'` prints `pass: hr_lane_mtime advanced 100..103 …`.
+
+**Deviations from plan:**
+
+- The session also carries `--allowed "$SP_DD_RULE"`, not just the start rule. The control is a `dd`, and `session.sh` → `SP_DD_RULE` is the rule every run-profile session that writes through `dd` carries. `legs-glob.sh` and `legs-registry.sh` pass it for the same control. Without it, a `dontAsk` session could deny the control, and WF5 would print `not run`.
+- `sp__wf5_grade` has two arms the plan does not name, and both are `not run`. (1) A `stat -f %m:` value that is all digits means the BSD arm answered, so the GNU arm WF5 asks about was never reached. (2) An `mtime` value that is not an integer means the worker did not source the run library. A second value lower than the first is `fail`, `did not advance`, the same as equal values. A `0` is checked before the advance test, so two zeros read `neither stat arm answered`.
+- In `sp__bg9_grade`'s `fail` arm, a last beat of `0` gives the evidence `no beat was written`. That is `hr_lane_mtime`'s answer when the beat file is absent, and a delta from epoch 0 means nothing. The verdict is still `fail`.
+- The worker's pid is recorded in BG9's evidence (`worker pid <n>: …`) and never passed to `sp_track_pid`. Inside the sandbox on Linux, `$$` may be a PID-namespace number, so a `kill` from outside could hit an unrelated process. The worker stops on its own, bounded by `SP_BG9_SECONDS`.
+- The leg prints both rows `not run` and launches no session when any of `sbx_bg9.pid`, `sbx_bg9.beat`, `sbx_bg9.done`, `sbx_wf5.mtimes` or `sbx_bg9_ctl` already exists in the clone. A stale `sbx_bg9.done` would fake a `pass`. This follows `legs-registry.sh`'s rule that the probe never removes a file it did not create.
+- A copy of `sbx_wf5.mtimes` is kept with the leg's evidence through `sp_keep_file`, at `$SP_TMP/detached.wf5.mtimes`. The clone's own files are removed after grading, because later legs share the clone.
+- **Evidence downgrade — parse check and the by-hand line.** `bash scripts/typecheck.sh` printed `PASS: typecheck` (`check-shell-parse: 94 files checked … 0 failed`), but its parse step covers only tracked files, so it missed the new, untracked `legs-detached.sh`. The permission layer refused the by-hand `bash -c '…'` line (`Permission to use Bash has been denied because Claude Code is running in don't ask mode`). Both checks were run instead with `bash scripts/scratch-run.sh harness-runs/scratch/task8_detached.py <repo_root>`. Results:
+  - `/bin/bash -n` gave `parse rc=0`.
+  - The plan's by-hand line, verbatim, printed `pass: hr_lane_mtime advanced 100..103 in a sandboxed process (stat -f %m gave '?', so the GNU stat -c %Y arm answered)`.
+  - Synthetic inputs graded as follows. WF5: equal values `fail`, zeros `fail`, one line `not run`, missing file `not run`, BSD integer `not run`, non-integer `not run`. BG9: a pass case `pass`, a 1 s delta with no done marker `fail`, no beat `fail`, a beat before the session's end with the done marker `not run`, no started line `not run`, a permission denial `not run`, and an absent call `not run`.
+  - The helpers, written with a 6-iteration bound and run unsandboxed on macOS, printed `sbx_bg9_started` and produced all four clone files. `sbx_wf5.mtimes` held `stat -f %m: 1793193435 | mtime 1793193435 | mtime 1793193438`, which grades `not run` (the BSD arm answered), as it should off Linux.
+
+  No Linux host was used, so neither row's live Linux behaviour is measured here. The Run gates phase's whole-tree run parses the file once it is tracked. The permission layer also refused removing the probe file, so it is still under the ignored `harness-runs/scratch/`.
 </content>
 </invoke>
