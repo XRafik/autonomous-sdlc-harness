@@ -36,7 +36,8 @@
 # the listener running; a listener the sandbox ended with its call or session (BG9's open question), or
 # `timeout 60` ended, reads `0` and is `not run`.
 #
-# THE GRADING FUNCTIONS read only their arguments and the stream, and set SP_VERDICT and SP_EVIDENCE:
+# THE GRADING FUNCTIONS read only their arguments, the stream and (sp__lb5_grade) legs-network.sh's
+# SP__NET_LOOPBACK_HOST, and set SP_VERDICT and SP_EVIDENCE:
 #   sp__lb_proxy_line <stream> <helper command>   prints `proxy: <NAME>=<value>, …` or `proxy: not recorded (<why>)`
 #   sp__lb_grade <stream> <plain command> <noproxy command> <token> <listener answered: 1|0>
 #   sp__lb5_grade <stream> <start command> <outside reply> <token> <listener alive: 1|0|?>
@@ -176,7 +177,7 @@ sp__lb5_grade() {
   fi
   case "$reply" in *"$token"*)
     SP_VERDICT=pass
-    SP_EVIDENCE="reachable from outside the sandbox: the token came back on 127.0.0.1:$port"
+    SP_EVIDENCE="reachable from outside the sandbox: the token came back on $SP__NET_LOOPBACK_HOST:$port"
     return 0
     ;;
   esac

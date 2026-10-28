@@ -40,7 +40,7 @@ The three findings below are all Should Fix.
 Each entry resolves to `harness-runs/code_reviews/feat_sandbox_probe_linux_legs_code_review/finding_<K>.md`.
 
 1. [x] **Finding 3** — Say "macOS and Linux" in `scripts/sandbox-probe.sh`'s opening header line _(layer: general)_
-2. [ ] **Finding 2** — Read `SP__NET_LOOPBACK_HOST` in `sp__lb5_grade`'s pass evidence, and amend the grading-functions header line _(layer: general)_
+2. [x] **Finding 2** — Read `SP__NET_LOOPBACK_HOST` in `sp__lb5_grade`'s pass evidence, and amend the grading-functions header line _(layer: general)_
 3. [ ] **Finding 1** — Raise `SP_BG9_SECONDS` from 20 to 60 so BG9's worker can outlive a real session, and state the bound in the header _(layer: general)_
 
 ---
