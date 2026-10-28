@@ -107,5 +107,12 @@ From `session.sh` and `controls.sh` it reuses the session, prompt, scratch-profi
 - `grep -n 'sp_judge_call' scripts/lib/sandbox-probe/legs-loopback.sh` shows every call with the layer argument `ran`, and none with `network` or `sandbox`.
 - `grep -n 'pgrep' scripts/lib/sandbox-probe/legs-loopback.sh` shows the one liveness check, after the outside requests and before `sp__lb5_grade`.
 - `git diff --stat` shows only the new file.
+
+**Deviations from plan:**
+
+- `lb-proxy.sh` prints an **empty** variable as `sbx_lb_proxy <NAME> unset` (curl ignores an empty proxy variable; the plan named only the unset case). It strips `user[:password]@` before the path, so an unencoded `/` in a password cannot leave a credential behind.
+- LB3's and LB4's comparison ends `…: not compared, one of the two was not run` when either the LB3/LB4 row or its LB1/LB2 counterpart was not run; the plan gave only `same` / `different`.
+- LB5: a `pgrep` exit other than 0 or 1 is passed to `sp__lb5_grade` as `pgrep exit <n>` and graded `not run` (`could not tell whether the listener was still running (liveness '<value>')`); a start call printing neither `sbx_lb5_listening` nor `sbx_lb5_no_listener` is `not run`; with `curl` not on the probe's PATH, LB5 is `not run` before session C launches.
+- Evidence downgrade: `bash scripts/typecheck.sh` passed, but its parse step covers only git-listed files and this file is untracked, so the parse claim rests on `/bin/bash -n` (3.2.57) over the file, run through `scripts/scratch-run.sh` (exit 0). The by-hand `bash -c 'http_proxy=… bash <helper>'` check was refused by the permission mode as a direct command; it was run as the same `bash` invocation from a scratch probe, printing `sbx_lb_proxy http_proxy proxy.example:3128` and no `u:p`.
 </content>
 </invoke>
