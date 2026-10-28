@@ -67,5 +67,12 @@ It reuses, unchanged:
 - The type check passes.
 - `grep -n 'sp_ctl_\|sp_row_result' scripts/lib/sandbox-probe/legs-refusal.sh` finds nothing, consistent with the header's no-control statement. Every row prints through `sp_result_line`.
 - `grep -n 'autonomous_inbox\|registry.json\|apt-get\|dnf' scripts/lib/sandbox-probe/legs-refusal.sh` finds nothing: the leg touches no inbox, no registry and no package.
+
+**Deviations from plan:**
+
+- `sp__rf2_grade` takes an optional third argument, `<main>`, so the `3` arm's evidence names the main checkout while the function still reads only its arguments; with it absent the evidence says `<main>`. The two-argument call Task 20 tests is unchanged.
+- RF1 and RF3 grade a call that was issued but has no `tool_result` as `not run` (`the call was issued but has no tool_result`), a case the plan's arm list does not name. RF3 grades a `tool_result` at any layer other than `sandbox` or `permission` with the marker absent as `not run` under the plan's "anything else" arm.
+- RF2's `1` arm with a refusal naming neither `bwrap` nor `socat` prints `not run` quoting the refusal, under the plan's "anything else" arm.
+- Evidence downgrade: the grading functions were not exercised against a recorded stream in this unit. The only verification run was `bash scripts/typecheck.sh` (shell parse of 96 files under `/bin/bash` 3.2.57 plus `tsc`, verdict `PASS: typecheck`) and the plan's two greps (both exit 1, no match). A bash probe has no route through `scripts/scratch-run.sh`, which refuses `.sh`; Task 20 owns the tests of `sp__rf1_grade`, `sp__rf2_grade` and `sp__rf3_grade`, and RF1–RF3 themselves need a Linux host lacking bwrap or socat.
 </content>
 </invoke>
