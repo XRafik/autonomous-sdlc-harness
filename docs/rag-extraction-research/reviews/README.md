@@ -186,3 +186,182 @@ Re-checked on 2026-10-28 against the revised synthesis, which now ends with `## 
 - the method table's fork 02 status.
 
 Open: 0 Must Fix, 2 Should Fix, 3 Nice to Have.
+
+## Round 2 review
+verdict: FAIL
+
+Checked on 2026-10-28 in the `chore_rag_extraction_research` working copy, against the rewritten `README.md`, `_brief.md` → `## Round 2 rulings`, forks 04–06 and their reviews, and `gh issue view 199` / `200`–`203`. Line numbers below are the synthesis's. The review tallies in the method table (l.14–16) match the review files: fork 04 3/7/3 then 5 SF and 2 NtH open; fork 05 3/8/6 then 2/2; fork 06 1/12/7 then 1/2.
+
+## Must Fix
+
+1. **The superseded step list drops the PGlite scale and concurrency probe, yet §5.1 and §5.4 still hang on it.**
+   - **What hangs on it.** §5.1's reversal list includes "PGlite fails the scale probe" (l.148, from fork 04 → `## 4`). §5.4 says (c)'s concurrent-session risk "stands" and that "either store at 10⁵–10⁶ chunks is **Unconfirmed**" (l.203).
+   - **What was dropped.** Round 1's step 2 carried that probe: PGlite build, RSS, size and p50 at 10⁵ chunks, and two processes on one directory, each with a go/no-go threshold. l.238 maps round 1's steps 1–2 onto new steps 1, 3 and 4, but none of them runs it:
+     - step 3 belongs to #199, whose largest corpus is about 42,000 chunks (`gh issue view 199`, question 9);
+     - step 4 measures `lexical` latency at 10⁶ chunks without naming a store;
+     - step 2's one-day test checks two sessions on `pgembed` only.
+   - **Why it matters.** §8 has no PGlite-at-scale question either: round 1's #3 is gone, and #7 and #18 are engine and build-time questions. So the probe that would reverse the runtime choice towards (b-pg) is never scheduled. (c)'s concurrency risk gets no test, although (b-pg)'s gets one. Under R2.1, which asks for the two to be presented evenly, that asymmetry matters.
+   - **Change:**
+     - name the store in step 4, and add PGlite at 10⁵ chunks (build, RSS, size, `lexical` p50) with round 1's thresholds, marked as proposals;
+     - add two processes on one PGlite directory to step 2, beside the `pgembed` two-session check;
+     - restore an §8 row for PGlite at 10⁵–10⁶ chunks (01 OQ5, 02 OQ1, 03 OQ9).
+
+## Should Fix
+
+1. **The two runtimes are not yet presented evenly (R2.1).** l.29 and the l.111 heading frame the runtime as "the maintainer's choice". But three lines speak in fork 04's voice as if they were the synthesis's own:
+   - l.144: "(c) stands unless step 2 comes out clean and `pgembed`'s platform and licence gaps close";
+   - l.146: "Each of these moves (b-pg) to first";
+   - l.151: "Two findings would count against (b-pg)".
+
+   Fork 04 does rank (c) first, at low-to-moderate confidence. Change: attribute all three to fork 04 ("fork 04's ranking stands unless …"), and state the reversal conditions as what each result favours. For example: "a buyer requires Python source → (b-pg); PGlite fails at 10⁵ → (b-pg); `pgembed` gains Intel and older-macOS wheels and a licence-clean build → (b-pg); `pgembed` fails first run or two sessions → (c)". The last condition is missing today.
+2. **A deciding fact for (c) is wrong once the remote store is the user's Postgres.**
+   - **The claim.** l.117 says (c) gives the same results on both stores because of "one dialect, one PostgreSQL major version". l.128 lists "its two stores run the same PostgreSQL major version" as a deciding fact for (c). l.151 counts a 17-against-18 `tsvector` difference "against (b-pg)".
+   - **Why it is wrong.** Fork 04 compares PGlite's 18.6 with the product's server image (`04 → (c)`: "the server image's minor"). It does not compare it with a managed host. A remote store under (c) is whatever the user runs: Cloud SQL and AlloyDB offer `pg_textsearch` on PG 17/18 (`05 → ## 2`), and RDS, Supabase and others run several majors. So the version question applies to both options, as embedded store against remote store.
+   - **Change:**
+     - reword the l.117 cell for (c) to "PGlite 18.6 against the remote host's major";
+     - drop that deciding fact at l.128;
+     - make §8 #4 "does PostgreSQL 16/17 give the same `tsvector` BM25 results as 18", a test that bears on both options.
+3. **The synthesis's own addition, "models tilt toward (b-pg)" (l.131–135), is correctly labelled and correctly scoped ("only the opt-in modes"). Its Nemotron half is fair, but its Granite half overstates the case.**
+   - **Nemotron.** It is PyTorch-only with remote code, and has no ONNX (`06 → §3.1`). Under (c) it needs a sidecar or a hosted reranker. That stands. Under (b-pg) it still needs `torch` and `trust_remote_code`, which is a security-review point in its own right. Say so.
+   - **Granite.** Three points cut against the tilt:
+     - **Transformers.js supports ModernBERT.** It is listed among its supported models (`huggingface/transformers.js` README) and has been since the 3.2.1 release (2024-12-19, `gh api repos/huggingface/transformers.js/releases`). The embedder's community export is a Transformers.js model: `onnx-community/granite-embedding-small-english-r2-ONNX` has `library_name: transformers.js` (`huggingface.co/api/models/…`). What stays **Unconfirmed** is narrower: the reranker's sequence-classification export in this runtime.
+     - **The ONNX export is owed under either runtime.** Fork 06 says "the product must export and host its own" (`06 → §3.2`). That is one build job in both cases, not a runtime difference.
+     - **"Loads directly as a `CrossEncoder`" means `sentence-transformers` plus `torch`.** That brings back the 929 MB environment for opt-in modes, unless Python also uses the ONNX export.
+   - **Change:** narrow the Granite bullet to "the reranker's ONNX export is untested in Transformers.js; ModernBERT itself is supported". Add the `torch` cost on the Python side. Keep the Nemotron bullet, with its `trust_remote_code` note.
+4. **The order of §7 steps 1 and 2 hides a dependency on runtimes.**
+   - Step 2's first item is the "model-free `lexical` footprint of both backends" (l.140). §5.3 says a vectorless store, refresh and session "cannot be built today, in either runtime" (l.170–174). Step 2 also compares fork 05's SQL with PGlite, which needs step 1's scorer.
+   - So step 1 must deliver `tsvector-bm25` and the lazy-model, vectorless path in **both** runtimes before the runtime is chosen. Otherwise step 2 measures a hand-hacked build. Step 1 (l.247) does not say which runtime it builds in.
+   - **Change:** say that step 1 builds in both runtimes, the scorer in each store and the vectorless path in each session, because step 2 depends on it. Or split out a minimal "lazy models" change for step 2 and leave the full build until after the choice.
+
+## Nice to Have
+
+1. **The superseded-step mapping (l.238–241) is inaccurate.** "Its extraction, serving and packaging steps survive as steps 8–9", but step 8 is new (#200–#202), and round 1's steps 6–8 survive as step 9 alone (l.255 says so). Round 1's steps 1–2 map onto steps 1, 3 and 4 only in part (Must Fix 1). Correct the line once Must Fix 1 is applied.
+2. **"It runs on 2 of 8 provider rows, in Preview at Google and Microsoft" (l.158) mixes two lists.** Fork 05's eight rows include Azure Flexible, which has no `pg_textsearch`, and not HorizonDB. The two rows are Cloud SQL/AlloyDB (Preview) and self-hosted (`05 → ## 4`, option (a)). Write "2 of 8 rows (Cloud SQL/AlloyDB in Preview, and self-hosted); HorizonDB, outside those rows, is also in Preview".
+3. **Point the §8 rows #199 already owns at #199 (R2.4).**
+   - §8 #20's "HNSW rows at `ef_search = 40`" is #199's question 9, which may become "its own fix branch". Point it at #199 rather than calling it an independent test.
+   - §8 #14, the long-section window, overlaps #199's question 3.
+   - Step 3's request for queries "tagged as identifier or low-overlap" touches #199's query-set question 7. As a request it is fine; label it as one.
+
+   None of these redesigns #199. Step 3's "#199 designs them" and fork 05's extra-arms framing honour R2.4.
+4. **Length.** `wc -w` gives 4,905 words in all, 4,771 outside code blocks, and 4,577 before `## Fork files and reviews`. The last matches the coordinator's "about 4 570" against about 4 500, so state that counting rule once in the method section, or trim about 400 words:
+   - the `## Round 1 review response` section could be one sentence plus a pointer;
+   - §2 repeats fork 01;
+   - the five-option list at l.105–109 repeats fork 04's table.
+
+## Rulings
+
+- **R2.1:** partly honoured.
+  - The client never seeing the engine is stated and grounded: the stdio/HTTP boundary, the same kit for every option and a conformance contract (l.53, `04 → §2`, `§3`). The Python lever is stated at the strength fork 04 gives it: Documented for RAG frameworks, **Unconfirmed** as a buyer requirement (l.129).
+  - Even presentation still needs Should Fix 1 and 2 and the PGlite half of Must Fix 1.
+- **R2.2:** honoured.
+  - Option (c) is presented: `tsvector-bm25` everywhere, with `pg_textsearch` as the one fast path. So are detection, no silent `ts_rank`, the parity criterion, the latency risk and the fallback (l.157–164), all faithful to `05 → ## 4`.
+  - Supabase's and DigitalOcean's lexical offer is stated (l.158).
+- **R2.3:** honoured.
+  - The default is model-free `lexical`, and `lexical` never reads `models:` or downloads (l.87).
+  - The opt-in local pair is the Granite one, clean by IBM's statement.
+  - Hosted models come only by configuration and need `egress: allow` (l.83–84). The image ships no weights until a policy exists (l.51, l.208).
+  - Nemotron becomes the local multilingual default only if it passes a CPU measurement, with hosted rerank available meanwhile. That matches fork 06 as revised after its re-review's "local by default" finding.
+- **R2.4:** honoured. #199 is a research branch that "changes no code … and no eval" and ends in proposed branches. The synthesis asks that #199's eval branches carry extra arms; it does not design them (l.249), and the lexical build branch comes before them, as fork 05 proposes. See Nice to Have 3.
+- **R2.5:** honoured. #200–#203 are linked (l.222–225), and their titles match `gh issue view` (symlink escape, `/health` error text, loopback hardening, reconnect).
+
+## Superseded round 1 conclusions
+
+These are marked as superseded at l.29, l.104, l.237 and l.309:
+- the TypeScript recommendation;
+- the "within 0.02" thresholds;
+- the step list.
+
+The rest is consistent:
+- round 1's Node-driver facts are kept in §4 under (c), and libpq is kept under (b-pg) (l.92–93), consistent with this file's round 1 review;
+- `allow_weaker` is restored (l.79);
+- §5.4 replaces round 1's PGlite resolution.
+
+The exception is the step mapping (Must Fix 1, Nice to Have 1).
+
+## Faithfulness: round 2 claims checked (32), with no finding beyond those above
+
+- **Fork 04** (`04 →` `§1`, `(b)`, `(c)`, `### The options, scored evenly`, `## 4`):
+  - LangChain 6–15× (6.2–14.6×), and LlamaIndex.TS archived;
+  - PGlite: PostgreSQL 18.6, single connection, 32-bit WASM;
+  - `pgembed`: PostgreSQL 17.9, 68–83 MB wheels, macOS 15 arm64 only, no `pg_textsearch` on Windows or Alpine, `pg_textsearch` 0.6.1;
+  - the AGPL `pg_search` binary with no notices, and the 6×3 build matrix;
+  - the shared server, Documented from the `pgserver` README and the source;
+  - the eval harness: 15 modules and 56 imports;
+  - the ~60 MB unofficial Node wheel and the `basedpyright` precedent;
+  - ~300 MB, 1.2 s, 2.0 GB against 929 MB, 6.9 s with the wrapper, 1.1 GB;
+  - the one-day test's three items, and the reversal list;
+  - the conformance contract's contents, and its two prerequisites.
+- **Fork 05** (`05 →` `## 2`, `## 3`, `## 4`, `### The confirming experiment`):
+  - Supabase and DigitalOcean rank `tsvector` without IDF, and Supabase's BM25 route is a ParadeDB replica;
+  - `lakebase_text` is Neon/Databricks only, with no stated licence;
+  - `ts_rank` 0.07 against BM25 0.69 (secondary), and AND matching;
+  - option (c), PGlite on the fast path, and `lakebase_text` first in line;
+  - the IDF formula, `k1` 1.2 and `b` 0.75; `pgembed`'s 0.6.1 formula is the same (`reviews/05-managed-postgres-lexical.md` → `## Re-review`);
+  - the 1e-3 parity criterion after `REINDEX`, with `<@>` scores negated;
+  - ~1 s at 5×10⁵ rows, two statistics designs, and the bound off by default;
+  - the fallback above a stated size;
+  - the "physical index statistics" quote;
+  - the two-column schema and the detection rule;
+  - the thresholds for step 4 (p50 ≤ 200 ms, p95 ≤ 1 s, ≤ 1 % of the top 10) and the managed-host exit for step 7.
+- **Fork 06** (`06 →` `§1.3`, `§2`, `§3`, `§4`):
+  - BEIR +11 %, peer-reviewed; "moderate at best" with its four sources; identifier queries contradict the general claim;
+  - the MS MARCO quotes; IBM and NVIDIA exclude it, and Microsoft defers to legal review;
+  - bge-small is "likely", and **Unconfirmed**; the alternatives that list MS MARCO;
+  - Granite small: 384 d, the same MTEB-v2 score as bge-small, 8192 tokens, community ONNX only;
+  - Granite reranker: 149M parameters (~6.5×), third-party ONNX only, and `0.32` needing recalibration;
+  - the multilingual embedder's exclusion is Inference;
+  - Nemotron: 1.24B parameters, OpenMDW plus Llama 3.2 terms, PyTorch with remote code, and the default only if it passes;
+  - savings of ~346 MB and up to ~1.15 GB, as an upper bound;
+  - the store, refresh and session blockers, with their `path:line`s;
+  - no calibrated abstention claim for `lexical`, and IDF coverage as a signal only;
+  - the seven `models:`/`mode:` rules, condensed faithfully.
+- **No statement kind is upgraded.** The bge-small, Granite-multilingual exclusion, Transformers.js, and PostgreSQL 17-against-18 claims keep their **Unconfirmed** or **Inference** labels.
+- **No fork finding is dropped that would change a recommendation,** apart from the PGlite scale and concurrency probe in Must Fix 1.
+
+Open: 1 Must Fix, 4 Should Fix, 4 Nice to Have.
+
+## Round 2 re-review
+verdict: PASS
+
+Re-checked on 2026-10-28 in the `chore_rag_extraction_research` working copy, against the revised `README.md`, which ends with `## Round 2 review response`. Line numbers below are the revised file's.
+
+**Resolved.**
+- **MF1:**
+  - Step 3 (l.229) probes PGlite and `pgembed` at 10⁵ chunks with round 1's thresholds, which are marked as proposals (l.223, §8 #22).
+  - Step 2 (l.228) runs two sessions on both stores.
+  - Step 5 (l.231) names its stores: the server image and the chosen embedded store.
+  - §8 #3 is restored (l.245).
+  - The §5.1 reversal list (l.134, l.136) now cites both probes.
+- **SF1:** the ranking is attributed to fork 04 (l.104, l.132). Each outcome names the side it favours, including `pgembed` failing → (c).
+- **SF2:** the l.110 row is symmetric ("against the remote host's major" on both sides). The deciding fact is gone from l.121, and §8 #5 covers PG 16/17 for both options.
+- **SF3:** l.124–126 now read as a narrow, labelled tilt. The Nemotron point keeps `trust_remote_code`. The Granite point carries the Transformers.js fact, notes that the ONNX export is owed under either runtime, and adds the `torch` cost on the Python side.
+- **SF4:** step 1 builds in both runtimes, before steps 2–3, and says why (l.227).
+- **NtH2:** fixed (l.144).
+- **NtH3:** fixed. §8 #14 and #21 point at #199, and step 4's query tags are labelled as a request.
+- **NtH1:** mostly fixed; see Nice to Have 2.
+
+**Evenness.** On the probes, (c) and (b-pg) now get the same tests: install and first run in step 2, two sessions in step 2, 10⁵ chunks in step 3, and latency on the chosen store in step 5. They also get the same thresholds, and each side has outcomes that favour it. One asymmetry is left in how the two-session result is read (Should Fix 1).
+
+**Length.** `wc -w` gives 5,197 words in all, and 4,737 before `## Fork files and reviews` with code blocks excluded. Against the soft target of about 4,500 that is about 5 % over, which is acceptable. It is not a finding.
+
+### Should Fix (open)
+
+1. **Two sessions on one PGlite directory are tested without the mitigation the synthesis already proposes, and a failure is counted as a reversal.**
+   - §5.4 (l.189) accepts that PGlite is single-connection and proposes "one indexer per directory (a lock, or sessions attaching to a running `serve`)".
+   - Step 2 (l.228) then requires "no error or corruption from two sessions on either store". l.134 makes "PGlite fails … two sessions on one directory" an outcome that favours (b-pg).
+   - Run without the lock, PGlite is expected to fail. `pgembed` has the sharing built in. So the test is weighted against (c).
+   - Change: run the PGlite case with the §5.4 lock or attach design and count only a failure under it as favouring (b-pg). Alternatively, record the lock as a (c) build cost in the §5.1 table and keep the raw test as information.
+
+### Nice to Have (open)
+
+1. **l.3 is now inaccurate.** It says "Nothing was re-researched, except the Node driver facts in §4". l.126 now also carries the Transformers.js/ModernBERT facts that the round 2 review supplied. Add them to that sentence.
+2. **The step mapping (l.223) names only step 9 as new.** Steps 2 (the one-day runtime test, from fork 04) and 6 (model measurements, from fork 06) are new as well. Write "steps 2, 6 and 9 are new".
+3. **§5.4 (l.189) gives no pointer to the tests.** It still reads "Either store at 10⁵–10⁶ chunks is **Unconfirmed**" with no reference to the tests that now settle it. Append "(§7 steps 2, 3 and 5)".
+
+**New text spot-checked; no new error found:**
+- step 1's note that the Python store reaches `pgembed`, which is right because `pgembed` is a Postgres server psycopg connects to;
+- step 5's fallback reference to §5.2;
+- §8 renumbering and its step pointers (#2→2, #3→2–3, #8→5, #9→1, #10→4, #15→6, #16→4 and 6, #17→7, #19→3);
+- the §5.1 reversal list against fork 04 → `## 4`.
+
+Open: 0 Must Fix, 1 Should Fix, 3 Nice to Have.

@@ -13,8 +13,16 @@ Framing given by the maintainer, to be taken as settled:
 - **Setup means, at minimum:** (1) a source of docs, either a local path or a remote one (a remote source needs a secure connection; whether that is the tool's or the client's responsibility is an open question, as is TLS certificate validation); (2) a Postgres, which may be local or remote (the Python backend already takes a connection string; a remote one needs credentials or a key).
 - **The current implementation is not locked** (maintainer, 2026-10-28). The product need not keep `pg_textsearch`, pgvector, PGlite or the current models: a local/embedded search mode, a different lexical engine or different model types (other embedders/rerankers, hosted embedding APIs, multilingual) are all acceptable. Treat today's stack as a starting point, not a constraint.
 - **Models: local by default, others by config** (maintainer, 2026-10-28). Keep local retrieval models (embedder, reranker) as the default wherever possible, for no or low money cost, but let a client choose other model types (hosted embedding/rerank APIs, larger or multilingual local models) through configuration.
-- **Being a late entrant is not a concern** (maintainer, 2026-10-28). Comparable local no-key tools existing is fine. **One engine serving both a local embedded store and a remote Postgres is the accepted direction.**
+- **Being a late entrant is not a concern** (maintainer, 2026-10-28). Comparable local no-key tools existing is fine. ~~One engine serving both a local embedded store and a remote Postgres is the accepted direction.~~ **Withdrawn in round 2**, see below.
 - Candidate shapes to evaluate, not assume: still a Claude Code plugin; an MCP server (stdio and/or remote HTTP); an HTTP API (self-hosted or hosted); an installable kit (npm / pip / Docker / Homebrew); or a combination.
+
+## Round 2 rulings (maintainer, 2026-10-28, after the round 1 synthesis)
+
+- **R2.1: the "one engine" ruling is withdrawn.** The engine may differ by store type (for example TypeScript/PGlite embedded, Python against a remote Postgres), and supporting both runtimes is acceptable. Large companies often use, recommend or require Python; weigh that as a lever. **The client does not need to know or care which engine runs underneath**; look for a different or better solution than round 1's "one TypeScript engine".
+- **R2.2: `pg_textsearch` being unavailable on most managed Postgres is a big drawback and must be decided.** Supabase and DigitalOcean come up often; find out why they are popular for this audience, what lexical/BM25 search they offer, and decide the lexical engine(s) and fallback.
+- **R2.3: the default search mode switches to model-free** (no embedder, no reranker on the default path), which also removes today's licence risk from the default. Fused search and reranking stay as options; the maintainer leans to keeping them for large/business corpora, where practice reportedly favours hybrid + rerank. The MS MARCO reranker licence risk is not accepted as it stands: find a model, or models, without it.
+- **R2.4: large/business corpus measurements belong to issue #199** (`rag chore_business_corpus_research`). Do not duplicate its eval design; literature and vendor evidence on what works for such corpora is in scope.
+- **R2.5: the four security gaps in today's code are filed** as #200–#203.
 
 ## The forks
 
@@ -23,6 +31,9 @@ Framing given by the maintainer, to be taken as settled:
 | `01-current-mechanism.md` | How retrieval works inside this repository today and where it would cut out | This repository's code and docs only. No web. |
 | `02-distribution-shapes.md` | How comparable systems are packaged, installed and invoked, and which shape fits | The web (primary sources: official docs, READMEs, registries), as of today (2026-10-28) |
 | `03-sources-database-security.md` | Ingesting docs from local and remote sources, the Postgres (local/remote/managed) the store needs, and the security of both connections | The web plus this repository's store and extension requirements |
+| `04-engine-architecture.md` | Round 2 (R2.1): engine per store type, dual runtime, or another architecture the client never sees | The web plus this repository |
+| `05-managed-postgres-lexical.md` | Round 2 (R2.2): the popular managed Postgres offerings and their lexical search, and the lexical-engine decision | The web plus this repository |
+| `06-models-and-modes.md` | Round 2 (R2.3): retrieval practice for large/business corpora, licence-clean embedders and rerankers, and a model-free default | The web plus this repository |
 
 ## Rules for every fork file
 
