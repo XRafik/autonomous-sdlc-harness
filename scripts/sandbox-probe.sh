@@ -6,6 +6,9 @@
 #
 # It changes nothing outside its own temp area, the probe clone and the probe branch, but one evidence directory:
 # a sandbox-probe-evidence.* directory under TMPDIR, kept only when a leg does not pass.
+# On Linux the registry leg is the exception: it writes beside <main>/<stateDir>/autonomous_logs/registry.json
+# and RG3 may move that directory aside; it removes what it wrote and restores the directory
+# (lib/sandbox-probe/legs-registry.sh → THE RESTORE RULE), so take a Linux run only in the throwaway container.
 # The directory that keeps the evidence of non-passing legs is printed last on stderr.
 # macOS, and Linux in a local container (docs/development.md → Gate 15); the GitHub-hosted runner legs are owed
 # under roadmap item 21 (docs/development.md §6).

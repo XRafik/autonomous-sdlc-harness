@@ -59,7 +59,7 @@
 
 Each entry resolves to `harness-runs/skeptic_reviews/feat_sandbox_probe_linux_legs_skeptic_review/finding_<K>.md`.
 
-1. [ ] **Finding 1** — Name the Linux `registry` leg's writes beside the main checkout's run registry as an exception to the probe's footprint statement, in Gate 15 and in `scripts/sandbox-probe.sh`'s header _(layer: general)_
+1. [x] **Finding 1** — Name the Linux `registry` leg's writes beside the main checkout's run registry as an exception to the probe's footprint statement, in Gate 15 and in `scripts/sandbox-probe.sh`'s header _(layer: general)_
 
 ---
 
