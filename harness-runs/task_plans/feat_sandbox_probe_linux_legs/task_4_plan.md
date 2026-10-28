@@ -45,5 +45,6 @@ TD4 is graded against **TD3's** result, never TD2's (`docs/sandbox-verification.
 - The type check passes.
 - `grep -n 'sp_leg_row_for' scripts/lib/sandbox-probe/legs-local.sh` shows exactly the two call sites, one for TD2/TD4 and one for T2/T3. No other row literal in the file changed: `git diff -U0 scripts/lib/sandbox-probe/legs-local.sh | grep -E '^[-+].*\b(TD2|T2|W7)\b'` shows only lines this task names.
 - `sp__td2_grade`'s body is unchanged: `git diff` shows no hunk inside it.
+  - **Deviations from plan:** `sp__t2_grade`'s fallback evidence, used when no log line matches, names the patterns it searched for. On Linux it now lists the two added strings too, so it does not claim a search it did not make. The macOS text is byte-identical. Also checked with a throwaway `.mjs` probe run through `scripts/scratch-run.sh` under `/bin/bash` 3.2: seven synthetic TD4 streams (pass; bare refused at `sandbox`; `-t` written; unknown error on `-d`; explicit refused at `permission`; `-d` absent; bare outside TMPDIR) graded pass / fail / fail / not run / not run / not run / fail, and the T3 log search quoted a `Read-only file system` line on Linux. The probe file is left at `harness-runs/scratch/td4_probe.mjs`, which is ignored, because the `rm` was refused.
 </content>
 </invoke>
