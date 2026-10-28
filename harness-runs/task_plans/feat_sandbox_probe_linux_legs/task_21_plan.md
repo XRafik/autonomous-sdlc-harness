@@ -81,6 +81,7 @@
 - Every row added or edited in §8 carries **not yet measured** in its Observed and Verdict cells, and none carries a measured value: `grep -nE '^\| (GW|LB|RF|DP)[0-9]' docs/sandbox-verification.md` shows each new id once, each with `not yet measured`.
 - `grep -n 'no Linux host with' docs/sandbox-verification.md` finds no line in rows TD4, T3, WF5 or BG9.
 - `grep -nE '^\| TD4 \|' docs/sandbox-verification.md` shows a row whose Expected cell names TD3 and `too few X's`, and does not carry `as TD2`.
+- **Deviations from plan:** §8's first block carries no `T3 (Linux)` or `TD4 (Linux)` row although the `gates` and `mktemp` legs list them: T3 and TD4 are already Linux rows (§5), edited in place by this task, and *"A new id is used only where none exists"*; §8's lead paragraph names them, with WF5 and BG9, as keeping their own §5 rows. Baselines cite the record's latest run per row, which for rows run 2 re-passed (§0 *The probe's second run*: every row run 1 passed passed again) reads `runs 1 and 2` where Gate 15's table says `run 1`.
 - No line in §0–§7 other than those this task names changed: `git diff` shows hunks only in the Since-then paragraph, the three stamp lines, rows TD4 (its Expected, Observed and Verdict cells), T3, WF5, BG9 and PD18, the §6 bullet, and the new §8.
 </content>
 </invoke>
