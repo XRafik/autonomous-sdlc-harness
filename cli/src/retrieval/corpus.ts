@@ -11,7 +11,7 @@
  * rest of the corpus is still returned.
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 import type { HarnessConfig } from '../config/model.js';
@@ -29,17 +29,22 @@ function toRepoRelative(repoRoot: string, absolute: string): string {
   return relative(repoRoot, absolute).split(sep).join('/');
 }
 
-/** Every `*.md` under `dir`, recursively; a symlinked directory is not descended into. */
-function markdownUnder(dir: string, out: string[]): void {
+/**
+ * Every `*.md` under `dir`, recursively; a symlinked directory is not descended into. Each
+ * accepted file is resolved through its symlinks and kept only if the real path still sits inside
+ * the repository (`resolveInside` warns and returns `undefined` when it does not); the corpus
+ * lists the original path, which is what the reader joins to the repository root.
+ */
+function markdownUnder(dir: string, out: string[], resolveInside: (full: string) => string | undefined): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      markdownUnder(full, out);
+      markdownUnder(full, out, resolveInside);
       continue;
     }
     if (!entry.name.endsWith('.md')) continue;
     if (entry.isFile() || (entry.isSymbolicLink() && statSync(full, { throwIfNoEntry: false })?.isFile() === true)) {
-      out.push(full);
+      if (resolveInside(full) !== undefined) out.push(full);
     }
   }
 }
@@ -48,6 +53,24 @@ function markdownUnder(dir: string, out: string[]): void {
 export function corpusFiles(repoRoot: string, config: HarnessConfig): CorpusFiles {
   const absolute: string[] = [];
   const warnings: string[] = [];
+
+  // The lexical checks in `insideRepo` compare the path as written; the read that follows it,
+  // however, is through the path and therefore follows symlinks. So the repository root is
+  // resolved once, and each accepted file is resolved too: a link whose target leaves the
+  // repository is dropped with the same warning an out-of-repository path gets, and one whose
+  // target stays inside is kept at the target, so the corpus names the bytes that will be read.
+  const realRoot = realpathSync(repoRoot);
+  const resolveInside = (full: string): string | undefined => {
+    const real = statSync(full, { throwIfNoEntry: false }) === undefined ? undefined : realpathSync(full);
+    if (real === undefined) {
+      return undefined;
+    }
+    if (real !== realRoot && !real.startsWith(realRoot + sep)) {
+      warnings.push(`document ${toRepoRelative(repoRoot, full)} escapes the repository through a symbolic link and was skipped`);
+      return undefined;
+    }
+    return real;
+  };
 
   const root = config.docs?.root;
   if (root === undefined) {
@@ -60,7 +83,7 @@ export function corpusFiles(repoRoot: string, config: HarnessConfig): CorpusFile
     } else if (statSync(full, { throwIfNoEntry: false })?.isDirectory() !== true) {
       warnings.push(`docs.root ${dir} is not a directory, so no documentation directory is indexed`);
     } else {
-      markdownUnder(full, absolute);
+      markdownUnder(full, absolute, resolveInside);
     }
   }
 
@@ -73,7 +96,7 @@ export function corpusFiles(repoRoot: string, config: HarnessConfig): CorpusFile
       warnings.push(`conventions document ${path} of layer ${layer.name} resolves outside the repository and was skipped`);
     } else if (statSync(full, { throwIfNoEntry: false })?.isFile() !== true) {
       warnings.push(`conventions document ${path} of layer ${layer.name} is missing and was skipped`);
-    } else {
+    } else if (resolveInside(full) !== undefined) {
       absolute.push(full);
     }
   }

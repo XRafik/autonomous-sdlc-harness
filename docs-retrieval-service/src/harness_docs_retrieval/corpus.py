@@ -7,7 +7,9 @@ resolving outside the repository becomes a warning line and the rest of the corp
 returned. No gate is applied here.
 
 Paths follow Node's `path` module, not `pathlib`: a join concatenates and normalizes lexically, and
-nothing resolves a symlink (`Path.resolve` does, so it is never used).
+the inside check stays lexical. Only the files the corpus accepts are resolved through their
+symlinks, so a link whose target leaves the repository is dropped with a warning; the resolution
+uses `os.path.realpath`, never `Path.resolve`.
 """
 
 import os
@@ -62,18 +64,19 @@ def _to_repo_relative(repo_root: str, absolute: str) -> str:
     return rel.replace(os.sep, "/")
 
 
-def _markdown_under(directory: str, out: list[str]) -> None:
+def _markdown_under(directory: str, out: list[str], resolve_inside) -> None:
     with os.scandir(directory) as entries:
         for entry in entries:
             full = os.path.join(directory, entry.name)
             if entry.is_dir(follow_symlinks=False):
-                _markdown_under(full, out)
+                _markdown_under(full, out, resolve_inside)
                 continue
             if not entry.name.endswith(".md"):
                 continue
             symlinked_file = entry.is_symlink() and os.path.isfile(full)
             if entry.is_file(follow_symlinks=False) or symlinked_file:
-                out.append(full)
+                if resolve_inside(full) is not None:
+                    out.append(full)
 
 
 def _js_template_value(value: object) -> str:
@@ -99,7 +102,27 @@ def corpus_files(repo_root: str, config: Mapping[str, Any]) -> CorpusFiles:
     warnings: list[str] = []
 
     # Each warning is kept on one line so a grep of `corpus.ts` finds it verbatim.
+    #
+    # The lexical `inside_repo` compares the path as written, but the read that follows is through
+    # the path and therefore follows symlinks. So the root is resolved once and each accepted file
+    # is resolved too: a link whose target leaves the repository is dropped with a warning, one
+    # whose target stays inside is kept at the target, so the corpus names the bytes read.
+    real_root = os.path.realpath(repo_root)
     docs = config.get("docs")
+
+    def resolve_inside(full: str):
+        if not os.path.lexists(full):
+            return None
+        real = os.path.realpath(full)
+        if real != real_root and not real.startswith(real_root + os.sep):
+            warnings.append(
+                "document "
+                + _to_repo_relative(repo_root, full)
+                + " escapes the repository through a symbolic link and was skipped"
+            )
+            return None
+        return real
+
     root: Any = docs.get("root", _MISSING) if docs is not None else _MISSING
     if root is _MISSING:
         warnings.append("docs.root is not set, so no documentation directory is indexed")
@@ -113,7 +136,7 @@ def corpus_files(repo_root: str, config: Mapping[str, Any]) -> CorpusFiles:
                 f"docs.root {d} is not a directory, so no documentation directory is indexed"
             )
         else:
-            _markdown_under(full, absolute)
+            _markdown_under(full, absolute, resolve_inside)
 
     for layer in config.get("layers") or []:
         conventions = layer.get("conventions")
@@ -126,7 +149,7 @@ def corpus_files(repo_root: str, config: Mapping[str, Any]) -> CorpusFiles:
             warnings.append(_conventions_outside_warning(p, n))
         elif not os.path.isfile(full):
             warnings.append(f"conventions document {p} of layer {n} is missing and was skipped")
-        else:
+        elif resolve_inside(full) is not None:
             absolute.append(full)
 
     relative = dict.fromkeys(_to_repo_relative(repo_root, path) for path in absolute)

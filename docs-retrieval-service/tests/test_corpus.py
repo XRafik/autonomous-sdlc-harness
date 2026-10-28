@@ -106,16 +106,64 @@ def test_conventions_document_under_docs_root_appears_once(tmp_path: Path) -> No
     assert result.warnings == ()
 
 
-def test_symlinked_directory_is_not_descended_and_symlinked_file_is_kept(tmp_path: Path) -> None:
+def test_symlinked_directory_is_not_descended(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write(repo, "docs/real.md")
     _write(tmp_path, "shared/linked-dir/inner.md")
-    _write(tmp_path, "shared/target.md")
     os.symlink(tmp_path / "shared" / "linked-dir", repo / "docs" / "linked-dir")
-    os.symlink(tmp_path / "shared" / "target.md", repo / "docs" / "linked.md")
     os.symlink(tmp_path / "shared" / "absent.md", repo / "docs" / "dangling.md")
     result = corpus_files(str(repo), _config("docs"))
-    assert result.files == ("docs/linked.md", "docs/real.md")
+    # The symlinked directory is not descended, and the dangling link is dropped silently.
+    assert result.files == ("docs/real.md",)
+    assert result.warnings == ()
+
+
+def test_symlink_whose_target_stays_inside_the_repository_is_kept(tmp_path: Path) -> None:
+    # A link whose target resolves back inside the repository is a real corpus file and stays.
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "shared").mkdir(parents=True)
+    _write(repo, "shared/canon.md")
+    os.symlink(repo / "shared" / "canon.md", repo / "docs" / "linked.md")
+    result = corpus_files(str(repo), _config("docs"))
+    assert result.files == ("docs/linked.md",)
+    assert result.warnings == ()
+
+
+def test_symlinked_file_that_escapes_the_repository_is_dropped_with_a_warning(
+    tmp_path: Path,
+) -> None:
+    # Route 1 (docs.root walker): a `.md` link under docs.root whose target lives outside the
+    # repository must not be indexed, and is reported with the same wording a plain
+    # out-of-repository path gets.
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    _write(repo, "docs/real.md")
+    _write(tmp_path, "outside/target.md")
+    os.symlink(tmp_path / "outside" / "target.md", repo / "docs" / "linked.md")
+    result = corpus_files(str(repo), _config("docs"))
+    assert result.files == ("docs/real.md",)
+    assert result.warnings == (
+        "document docs/linked.md escapes the repository through a symbolic link and was skipped",
+    )
+
+
+def test_conventions_symlink_that_escapes_the_repository_is_dropped_with_a_warning(
+    tmp_path: Path,
+) -> None:
+    # Route 2 (layers[].conventions): the lexical inside check passes, so the escape only shows
+    # once the target is resolved; it is dropped with a warning instead of being indexed.
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    _write(repo, "docs/real.md")
+    _write(tmp_path, "outside/conventions.md")
+    os.symlink(tmp_path / "outside" / "conventions.md", repo / "conventions.md")
+    config = _config("docs", _layer("cli", "./conventions.md"))
+    result = corpus_files(str(repo), config)
+    assert result.files == ("docs/real.md",)
+    assert result.warnings == (
+        "document conventions.md escapes the repository through a symbolic link and was skipped",
+    )
 
 
 def test_layer_with_empty_or_non_string_conventions_is_skipped_silently(tmp_path: Path) -> None:
