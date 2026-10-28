@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sandbox-probe.sh — measure the unattended sandbox on macOS: cut a throwaway probe clone, launch
+# sandbox-probe.sh — measure the unattended sandbox on macOS and Linux: cut a throwaway probe clone, launch
 # sandboxed headless sessions on the watcher's launch line, and print one result line per leg for the
 # rows of docs/sandbox-verification.md. Hand-written for this repository, like probe-plugin-cli.sh:
 # not in the set `init --force` regenerates, and not a cli/templates/ file.
