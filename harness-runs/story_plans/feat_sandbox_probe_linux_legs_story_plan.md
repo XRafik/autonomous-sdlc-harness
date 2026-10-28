@@ -89,7 +89,7 @@ Each entry resolves 1:1 to `harness-runs/task_plans/feat_sandbox_probe_linux_leg
 
 1. [x] **Task 1** — Add the probe's platform library: `sp_platform_of`, `sp_prereq_cmd` and the stamp _(layer: general)_ _(points: 10)_
 2. [x] **Task 2** — Declare the Linux legs and rows, admit Linux at preflight refusal 2, and add the `refusal` subcommand with its narrower preflight _(layer: general)_ _(points: 20)_
-3. [ ] **Task 3** — Fix PD18 in the judge, and add the Linux refusal string and the `unrecognised` layer _(layer: general)_ _(points: 15)_
+3. [x] **Task 3** — Fix PD18 in the judge, and add the Linux refusal string and the `unrecognised` layer _(layer: general)_ _(points: 15)_
 4. [ ] **Task 4** — Take TD4 with TD3's expectation and T3 in place of TD2 and T2 on Linux _(layer: general)_ _(points: 15)_
 5. [ ] **Task 5** — Grade the write-protection and git legs' Linux refusals, and print the parity script's Linux expectations _(layer: general)_ _(points: 12)_
 6. [ ] **Task 22** — Let N3's and N4's grades read an `unrecognised` curl error as their data _(layer: general)_ _(points: 8)_
